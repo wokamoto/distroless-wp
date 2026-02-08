@@ -1,4 +1,4 @@
-FROM nginx:1.29 AS builder
+FROM nginx:1.29-alpine-slim AS builder
 
 # https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 ARG TIME_ZONE="Asia/Tokyo"
@@ -8,6 +8,7 @@ RUN set -eux; \
     cp -a --parents /usr/lib/nginx /opt; \
     cp -a --parents /usr/share/nginx /opt; \
     cp -a --parents /var/log/nginx /opt; \
+    cp -a --parents /var/cache/nginx /opt; \
     cp -aL --parents /var/run /opt; \
     cp -a --parents /etc/nginx /opt; \
     cp -a --parents /etc/passwd /opt; \
@@ -30,13 +31,12 @@ RUN set -eux; \
 FROM gcr.io/distroless/base-debian13
 
 COPY --from=builder /opt /
-
 COPY ./config/nginx/nginx.conf /etc/nginx/nginx.conf
-
 COPY ./config/nginx/conf.d/ /etc/nginx/conf.d/
-
 COPY ./config/ssl/ /etc/nginx/ssl/
 
 EXPOSE 80 443
+
+STOPSIGNAL SIGQUIT
 
 ENTRYPOINT ["/usr/sbin/nginx", "-g", "daemon off;"]
