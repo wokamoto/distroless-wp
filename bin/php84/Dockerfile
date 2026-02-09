@@ -15,7 +15,8 @@ RUN set -eux; \
 COPY ./www/wp-config.php /var/www/html/wp/
 
 RUN set -eux; \
-    echo "memory_limit = 256M" > /usr/local/etc/php/conf.d/memory-limit.ini
+    echo "memory_limit = 256M" > /usr/local/etc/php/conf.d/memory-limit.ini; \
+    printf 'date.timezone = "%s"\n' "${TIME_ZONE:-Asia/Tokyo}" > /usr/local/etc/php/conf.d/zz-timezone.ini
 
 RUN set -eux; \
     apk add --no-cache tzdata; \
