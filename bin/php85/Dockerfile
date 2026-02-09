@@ -65,4 +65,6 @@ WORKDIR /var/www/html
 
 EXPOSE 9000
 
+STOPSIGNAL SIGQUIT
+
 ENTRYPOINT ["/usr/local/sbin/php-fpm", "-F"]
