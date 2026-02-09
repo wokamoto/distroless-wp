@@ -1,19 +1,22 @@
-FROM nginx:1.29-alpine-slim AS builder
+FROM httpd:2.4-alpine AS builder
 
 # https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 ARG TIME_ZONE="Asia/Tokyo"
 
 RUN set -eux; \
-    mkdir -p /opt/var/cache/nginx /opt/etc; \
-    cp -a --parents /usr/lib/nginx /opt; \
-    cp -a --parents /usr/share/nginx /opt; \
-    cp -a --parents /var/log/nginx /opt; \
-    cp -aL --parents /var/run /opt; \
-    cp -a --parents /etc/nginx /opt; \
+    apk add --no-cache tzdata
+
+RUN set -eux; \
+    mkdir -p /opt/etc; \
+    mkdir -p /opt/var/www/html; \
+    cp -a --parents /usr/local/apache2 /opt; \
     cp -a --parents /etc/passwd /opt; \
     cp -a --parents /etc/group /opt; \
-    cp -a --parents /usr/sbin/nginx /opt; \
-    ldd /usr/sbin/nginx \
+    cp -aL --parents /var/run /opt; \
+    ( \
+      ldd /usr/local/apache2/bin/httpd; \
+      find /usr/local/apache2/modules -type f -name '*.so' -exec ldd '{}' ';' \
+    ) 2>/dev/null \
       | awk '{ if ($3 ~ /^\//) print $3; else if ($1 ~ /^\//) print $1; }' \
       | sort -u \
       | while IFS= read -r so; do \
@@ -31,12 +34,9 @@ FROM gcr.io/distroless/base-debian13
 
 COPY --from=builder /opt /
 
-COPY ./config/nginx/nginx.conf /etc/nginx/nginx.conf
+COPY ./config/httpd/httpd.conf /usr/local/apache2/conf/httpd.conf
+COPY ./config/httpd/conf.d/ /usr/local/apache2/conf/conf.d/
 
-COPY ./config/nginx/conf.d/ /etc/nginx/conf.d/
+EXPOSE 80
 
-COPY ./config/ssl/ /etc/nginx/ssl/
-
-EXPOSE 80 443
-
-ENTRYPOINT ["/usr/sbin/nginx", "-g", "daemon off;"]
+ENTRYPOINT ["/usr/local/apache2/bin/httpd", "-DFOREGROUND", "-f", "/usr/local/apache2/conf/httpd.conf"]
