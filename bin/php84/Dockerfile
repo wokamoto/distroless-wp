@@ -18,6 +18,7 @@ RUN set -eux; \
     echo "memory_limit = 256M" > /usr/local/etc/php/conf.d/memory-limit.ini
 
 RUN set -eux; \
+    apk add --no-cache tzdata; \
     cp /usr/share/zoneinfo/${TIME_ZONE:-ROC} /etc/localtime
 
 RUN set -eux; \
