@@ -51,9 +51,10 @@
 - HTTP: `8080`
 - HTTPS: `8443`
 - phpMyAdmin HTTP/HTTPS: `9080` / `9443`
-- Mailpit SMTP/UI: `19925` / `19980`
+- Mailpit UI: `19980`
 
 データベース（`database` サービス）はホストへポート公開しておらず、Compose ネットワーク内（`database:3306`）からのみ接続できます。
+Mailpit の SMTP（`mail:1025`）もホストへ公開せず、内部ネットワーク専用です。
 
 ## WP-CLI
 - 補助サービス経由で実行します。

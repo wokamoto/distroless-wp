@@ -51,9 +51,10 @@ Default `.env` ports:
 - HTTP: `8080`
 - HTTPS: `8443`
 - phpMyAdmin HTTP/HTTPS: `9080` / `9443`
-- Mailpit SMTP/UI: `19925` / `19980`
+- Mailpit UI: `19980`
 
 Database (`database` service) is not published to the host and is reachable only inside the Compose network (`database:3306`).
+Mailpit SMTP (`mail:1025`) is also internal-only and is not published to the host.
 
 ## WP-CLI
 - Run commands via the helper service:

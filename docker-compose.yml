@@ -135,8 +135,9 @@ services:
   mail:
     image: axllent/mailpit:latest
     container_name: "${COMPOSE_PROJECT_NAME}-mail"
+    expose:
+      - "1025"
     ports:
-      - "${HOST_MACHINE_SMTP_PORT}:1025"
       - "${HOST_MACHINE_MAILPIT_PORT}:8025"
     volumes:
       - ./data/mailpit:/data
