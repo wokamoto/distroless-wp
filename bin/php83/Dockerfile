@@ -1,6 +1,7 @@
 FROM wordpress:php8.3-fpm-alpine AS builder
 
 ARG WP_VERSION=latest
+ARG TIME_ZONE="Asia/Tokyo"
 
 RUN set -eux; \
     mkdir -p \
@@ -15,6 +16,9 @@ COPY ./www/wp-config.php /var/www/html/wp/
 
 RUN set -eux; \
     echo "memory_limit = 256M" > /usr/local/etc/php/conf.d/memory-limit.ini
+
+RUN set -eux; \
+    cp /usr/share/zoneinfo/${TIME_ZONE:-ROC} /etc/localtime
 
 RUN set -eux; \
     if [ "${WP_VERSION}" = "latest" ]; then \
@@ -38,6 +42,7 @@ RUN set -eux; \
     cp -a --parents /etc/ssl /opt; \
     cp -a --parents /etc/services /opt; \
     cp -a --parents /etc/nsswitch.conf /opt; \
+    cp -a --parents /etc/localtime /opt; \
     ( \
       ldd /usr/local/sbin/php-fpm; \
       ldd /usr/local/bin/php; \

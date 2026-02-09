@@ -45,6 +45,7 @@
 - `WP_VERSION` はビルド時の WordPress コアを制御します。
   - `latest`: ベースの WordPress イメージ同梱コアをコピー
   - 例 `6.9.1`: そのバージョンの tarball をダウンロードして展開
+- `TIME_ZONE` は `nginx` / `php` / `database` イメージのビルド時に `/etc/localtime` を設定します。
 - `STAGE=production` の場合は `www/wp-config.php` で WordPress のデバッグ定数が無効化されます。その他の値では有効化されます。
 
 `.env` のデフォルトポート:

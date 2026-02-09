@@ -5,6 +5,7 @@ services:
       dockerfile: ./bin/${PHPVERSION}/Dockerfile
       args:
         WP_VERSION: ${WP_VERSION-latest}
+        TIME_ZONE: ${TIME_ZONE-Asia/Tokyo}
     container_name: "${COMPOSE_PROJECT_NAME}-${PHPVERSION}"
     restart: "always"
     expose:
@@ -98,6 +99,8 @@ services:
     build:
       context: .
       dockerfile: ./bin/${DATABASE}/Dockerfile
+      args:
+        TIME_ZONE: ${TIME_ZONE-Asia/Tokyo}
     container_name: "${COMPOSE_PROJECT_NAME}-${DATABASE}"
     restart: "always"
     expose:

@@ -45,6 +45,7 @@ If you need to recreate volumes (including DB and WordPress files in `wpdata`):
 - `WP_VERSION` controls WordPress core at build time:
   - `latest`: copy bundled core from the base WordPress image.
   - e.g. `6.9.1`: download and extract that release tarball.
+- `TIME_ZONE` sets `/etc/localtime` at build time for `nginx`, `php`, and `database` images.
 - `STAGE=production` disables WordPress debug constants in `www/wp-config.php`; other values enable debug mode.
 
 Default `.env` ports:
