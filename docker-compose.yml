@@ -6,6 +6,7 @@ services:
       args:
         WP_VERSION: ${WP_VERSION-latest}
         TIME_ZONE: ${TIME_ZONE-Asia/Tokyo}
+    image: distroless-wp:${PHPVERSION}
     container_name: "${COMPOSE_PROJECT_NAME}-${PHPVERSION}"
     restart: "always"
     expose:
@@ -43,6 +44,7 @@ services:
       dockerfile: ./bin/wp-cli/Dockerfile
       args:
         TIME_ZONE: ${TIME_ZONE-Asia/Tokyo}
+    image: distroless-wp:wp-cli
     container_name: "${COMPOSE_PROJECT_NAME}-wp-cli"
     restart: "always"
     command:
@@ -83,7 +85,7 @@ services:
       dockerfile: ./bin/${WEBSERVER-nginx}/Dockerfile
       args:
         TIME_ZONE: ${TIME_ZONE-Asia/Tokyo}
-    #image: nginx:1.29-alpine or custom apache24 distroless image
+    image: distroless-wp:${WEBSERVER-nginx}
     container_name: "${COMPOSE_PROJECT_NAME}-${WEBSERVER-nginx}"
     restart: "always"
     depends_on:
@@ -107,6 +109,7 @@ services:
     build:
       context: .
       dockerfile: ./bin/${DATABASE}/Dockerfile
+    image: distroless-wp:${DATABASE}
     container_name: "${COMPOSE_PROJECT_NAME}-${DATABASE}"
     restart: "always"
     expose:
