@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/sh
 set -eu
 
 WP_PATH="${WP_PATH:-/var/www/html/wp}"

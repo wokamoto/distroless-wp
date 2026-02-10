@@ -38,15 +38,21 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
   wp-cli:
-    image: wordpress:cli
+    build:
+      context: .
+      dockerfile: ./bin/wp-cli/Dockerfile
+      args:
+        TIME_ZONE: ${TIME_ZONE-Asia/Tokyo}
     container_name: "${COMPOSE_PROJECT_NAME}-wp-cli"
     restart: "always"
-    command: sh -c "sh /usr/local/bin/update-wordpress-languages.sh && while true; do sleep 3600; done"
+    command:
+      - /usr/bin/sh
+      - -c
+      - /usr/bin/sh /usr/local/bin/update-wordpress-languages.sh && while true; do sleep 3600; done
     depends_on:
       - database
     volumes:
       - wpdata:/var/www/html
-      - ./bin/update-wordpress-languages.sh:/usr/local/bin/update-wordpress-languages.sh:ro
       - ${WP_CONFIG_FILE-./www/wp-config.php}:/var/www/html/wp/wp-config.php:ro
       - ${WP_CONTENT_DIR-./www/content}/languages:/var/www/html/content/languages:rw
       - ${WP_CONTENT_DIR-./www/content}/mu-plugins:/var/www/html/content/mu-plugins:rw
@@ -55,6 +61,7 @@ services:
       - ${WP_CONTENT_DIR-./www/content}/uploads:/var/www/html/content/uploads:rw
     environment:
       STAGE: ${STAGE-local}
+      WP_CLI_ALLOW_ROOT: "true"
       DB_NAME: ${MYSQL_DATABASE}
       DB_USER: ${MYSQL_USER}
       DB_PASSWORD: ${MYSQL_PASSWORD}
