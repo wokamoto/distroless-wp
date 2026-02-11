@@ -53,7 +53,7 @@
    - `http://localhost:19980`（Mailpit UI）
 3. 停止: `docker compose stop`
 
-永続 `wpdata` ボリュームを初期化して WordPress コアを再展開する場合:
+永続ボリューム（`wpdata`、`dbdata`、`mailpitdata`）を初期化する場合:
 - `docker compose down -v`
 - `docker compose up -d --build`
 
@@ -101,6 +101,7 @@ WordPress から同梱 Mailpit に送信する場合:
 ## 環境変数メモ
 - `STAGE` に応じて `www/wp-config.php` のデバッグ系定数が切り替わります（`production` で無効化）。
 - DB 認証情報と Salt は Compose 環境変数として注入されます。
+- WordPress、MySQL、Mailpit の永続データは named volume（`wpdata`、`dbdata`、`mailpitdata`）に保存されます。
 - ログのマウント先は `.env` で変更できます（`NGINX_LOG_DIR`、`HTTPD_LOG_DIR`、`PHP_FPM_LOG_DIR`、`MYSQL_LOG_DIR`）。
 - ローカル以外で利用する場合は `.env` の Salt プレースホルダーを必ず置き換えてください。
 - `wp-cli` 起動時に言語更新を1回実行し、`/var/www/html/.wp-language-updated` を作成します。

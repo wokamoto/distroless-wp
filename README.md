@@ -53,7 +53,7 @@
    - `http://localhost:19980` (Mailpit UI)
 3. Stop: `docker compose stop`
 
-To reset the persistent `wpdata` volume (and reseed WordPress core files):
+To reset all persistent volumes (`wpdata`, `dbdata`, `mailpitdata`):
 - `docker compose down -v`
 - `docker compose up -d --build`
 
@@ -101,6 +101,7 @@ To send mail to the bundled Mailpit service from WordPress:
 ## Environment Notes
 - `STAGE` controls WordPress debug-related constants in `www/wp-config.php` (`production` disables debug flags).
 - DB credentials and auth salts are injected through Compose environment variables.
+- Persistent WordPress, MySQL, and Mailpit data are stored in named volumes (`wpdata`, `dbdata`, `mailpitdata`).
 - Log mount directories are configurable via `.env` (`NGINX_LOG_DIR`, `HTTPD_LOG_DIR`, `PHP_FPM_LOG_DIR`, `MYSQL_LOG_DIR`).
 - Replace placeholder auth salts in `.env` before any non-local use.
 - On startup, `wp-cli` runs language updates once and writes `/var/www/html/.wp-language-updated`.
