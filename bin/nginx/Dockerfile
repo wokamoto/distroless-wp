@@ -18,11 +18,11 @@ RUN set -eux; \
       /var/www/html/content/themes \
       /var/www/html/content/uploads; \
     if [ "${WP_VERSION}" = "latest" ]; then \
-      rsync -avz --exclude *.php --delete /usr/src/wordpress/ /var/www/html/wp/; \
+      rsync -am --exclude '*.php' --delete /usr/src/wordpress/ /var/www/html/wp/; \
     else \
       wget -q -O /tmp/wordpress.tar.gz "https://wordpress.org/wordpress-${WP_VERSION}.tar.gz"; \
       tar -xzf /tmp/wordpress.tar.gz -C /tmp; \
-      cp -a /tmp/wordpress/. /var/www/html/wp/; \
+      rsync -am --exclude '*.php' --delete /tmp/wordpress/ /var/www/html/wp/; \
       rm -rf /tmp/wordpress /tmp/wordpress.tar.gz; \
     fi; \
     printf "%s\n" "<?php // Silence is golden." > /var/www/html/index.php; \

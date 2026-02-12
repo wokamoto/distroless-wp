@@ -2,11 +2,11 @@ services:
   php:
     build:
       context: .
-      dockerfile: ./bin/${PHPVERSION}/Dockerfile
+      dockerfile: ./bin/wordpress/${PHPVERSION}/Dockerfile
       args:
         WP_VERSION: ${WP_VERSION-latest}
         TIME_ZONE: ${TIME_ZONE-Asia/Tokyo}
-    image: distroless-wp:${PHPVERSION}
+    image: distroless-wp:wordpress-${PHPVERSION}
     container_name: "${COMPOSE_PROJECT_NAME}-${PHPVERSION}"
     restart: "always"
     expose:
@@ -40,7 +40,7 @@ services:
   wp-cli:
     build:
       context: .
-      dockerfile: ./bin/wp-cli/Dockerfile
+      dockerfile: ./bin/wordpress/cli/Dockerfile
       args:
         WP_VERSION: ${WP_VERSION-latest}
         TIME_ZONE: ${TIME_ZONE-Asia/Tokyo}
