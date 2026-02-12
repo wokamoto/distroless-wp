@@ -1,4 +1,4 @@
-FROM mysql:8
+FROM mysql:8.0
 
 # https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 ARG TIME_ZONE="Asia/Tokyo"

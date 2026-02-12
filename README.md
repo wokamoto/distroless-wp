@@ -10,7 +10,7 @@
 - Nginx 1.29 (`bin/nginx/Dockerfile`)
 - Apache HTTP Server 2.4 (`bin/httpd/Dockerfile`)
 - WordPress + PHP-FPM (`bin/wordpress/php83/Dockerfile`, `bin/wordpress/php84/Dockerfile`, `bin/wordpress/php85/Dockerfile`)
-- MySQL (`bin/mysql8/Dockerfile` or `bin/mysql84/Dockerfile`)
+- MySQL (`bin/mysql80/Dockerfile` or `bin/mysql84/Dockerfile`)
 - phpMyAdmin (`phpmyadmin`)
 - Mailpit (`axllent/mailpit`)
 
@@ -77,7 +77,7 @@ Database access:
 
 ### Image and Version Selection
 - `PHPVERSION` selects the PHP image Dockerfile (`php83`, `php84`, `php85`), default: `php84`
-- `DATABASE` selects the database Dockerfile (`mysql8`, `mysql84`), default: `mysql84`
+- `DATABASE` selects the database Dockerfile (`mysql80`, `mysql84`), default: `mysql84`
 - `WEBSERVER` selects the web server image Dockerfile (`httpd`, `nginx`), default: `nginx`
 - `WP_VERSION` controls WordPress core source for the PHP build, default: `latest`
 - After changing these values in `.env`, rebuild with `docker compose up -d --build`

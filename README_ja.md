@@ -10,7 +10,7 @@
 - Nginx 1.29（`bin/nginx/Dockerfile`）
 - Apache HTTP Server 2.4（`bin/httpd/Dockerfile`）
 - WordPress + PHP-FPM（`bin/wordpress/php83/Dockerfile`、`bin/wordpress/php84/Dockerfile`、`bin/wordpress/php85/Dockerfile`）
-- MySQL（`bin/mysql8/Dockerfile` または `bin/mysql84/Dockerfile`）
+- MySQL（`bin/mysql80/Dockerfile` または `bin/mysql84/Dockerfile`）
 - phpMyAdmin（`phpmyadmin`）
 - Mailpit（`axllent/mailpit`）
 
@@ -77,7 +77,7 @@
 
 ### イメージとバージョンの選択
 - `PHPVERSION` は PHP イメージ Dockerfile を選択（`php83`、`php84`、`php85`）。既定値: `php84`
-- `DATABASE` は DB イメージ Dockerfile を選択（`mysql8`、`mysql84`）。既定値: `mysql84`
+- `DATABASE` は DB イメージ Dockerfile を選択（`mysql80`、`mysql84`）。既定値: `mysql84`
 - `WEBSERVER` は Web サーバーイメージ Dockerfile を選択（`httpd`、`nginx`）。既定値: `nginx`
 - `WP_VERSION` は PHP ビルド時の WordPress コア取得元を指定。既定値: `latest`
 - `.env` のこれらを変更後は `docker compose up -d --build` で再ビルドします
