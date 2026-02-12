@@ -9,7 +9,7 @@
 ## Tech Stack
 - Nginx 1.29 (`bin/nginx/Dockerfile`)
 - Apache HTTP Server 2.4 (`bin/httpd/Dockerfile`)
-- WordPress + PHP-FPM (`bin/php83/Dockerfile`, `bin/php84/Dockerfile`, `bin/php85/Dockerfile`)
+- WordPress + PHP-FPM (`bin/wordpress/php83/Dockerfile`, `bin/wordpress/php84/Dockerfile`, `bin/wordpress/php85/Dockerfile`)
 - MySQL (`bin/mysql8/Dockerfile` or `bin/mysql84/Dockerfile`)
 - phpMyAdmin (`phpmyadmin`)
 - Mailpit (`axllent/mailpit`)
@@ -53,7 +53,7 @@
    - `http://localhost:19980` (Mailpit UI)
 3. Stop: `docker compose stop`
 
-To reset all persistent volumes (`wpdata`, `dbdata`, `mailpitdata`):
+To reset persistent named volumes (`dbdata`, `mailpitdata`):
 - `docker compose down -v`
 - `docker compose up -d --build`
 
@@ -101,7 +101,7 @@ To send mail to the bundled Mailpit service from WordPress:
 ## Environment Notes
 - `STAGE` controls WordPress debug-related constants in `www/wp-config.php` (`production` disables debug flags).
 - DB credentials and auth salts are injected through Compose environment variables.
-- Persistent WordPress, MySQL, and Mailpit data are stored in named volumes (`wpdata`, `dbdata`, `mailpitdata`).
+- WordPress content is mounted from `${WP_CONTENT_DIR-./www/content}` (bind mount), while MySQL and Mailpit data are stored in named volumes (`dbdata`, `mailpitdata`).
 - Log mount directories are configurable via `.env` (`NGINX_LOG_DIR`, `HTTPD_LOG_DIR`, `PHP_FPM_LOG_DIR`, `MYSQL_LOG_DIR`).
 - Replace placeholder auth salts in `.env` before any non-local use.
 - On startup, `wp-cli` runs language updates once and writes `/var/www/html/.wp-language-updated`.
