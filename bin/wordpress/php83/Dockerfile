@@ -20,7 +20,7 @@ RUN set -eux; \
     else \
       wget -q -O /tmp/wordpress.tar.gz "https://wordpress.org/wordpress-${WP_VERSION}.tar.gz"; \
       tar -xzf /tmp/wordpress.tar.gz -C /tmp; \
-      rcp -a /tmp/wordpress/. /var/www/html/wp/; \
+      cp -a /tmp/wordpress/. /var/www/html/wp/; \
       rm -rf /tmp/wordpress /tmp/wordpress.tar.gz; \
     fi; \
     printf "%s\n" "<?php" "define( 'WP_USE_THEMES', true );" "require __DIR__ . '/wp/wp-blog-header.php';" > /var/www/html/index.php; \
