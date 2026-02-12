@@ -5,7 +5,7 @@ ARG WP_VERSION=latest
 ARG TIME_ZONE="Asia/Tokyo"
 
 RUN set -eux; \
-    apk add --no-cache tzdata wget tar rsync
+    apk add --no-cache tzdata wget tar
 
 RUN set -eux; \
     mkdir -p \
@@ -16,11 +16,11 @@ RUN set -eux; \
       /var/www/html/content/themes \
       /var/www/html/content/uploads && \
     if [ "${WP_VERSION}" = "latest" ]; then \
-      rsync -am --include='*/' --include='*.php' --include='*.json' --include='*.js' --include='*.css' --exclude='*' --delete /usr/src/wordpress/ /var/www/html/wp/; \
+      cp -a /usr/src/wordpress/. /var/www/html/wp/; \
     else \
       wget -q -O /tmp/wordpress.tar.gz "https://wordpress.org/wordpress-${WP_VERSION}.tar.gz"; \
       tar -xzf /tmp/wordpress.tar.gz -C /tmp; \
-      rsync -am --include='*/' --include='*.php' --include='*.json' --include='*.js' --include='*.css' --exclude='*' --delete /tmp/wordpress/ /var/www/html/wp/; \
+      rcp -a /tmp/wordpress/. /var/www/html/wp/; \
       rm -rf /tmp/wordpress /tmp/wordpress.tar.gz; \
     fi; \
     printf "%s\n" "<?php" "define( 'WP_USE_THEMES', true );" "require __DIR__ . '/wp/wp-blog-header.php';" > /var/www/html/index.php; \
