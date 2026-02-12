@@ -7,8 +7,8 @@
 - The stack includes `wp-cli`, phpMyAdmin, and Mailpit.
 
 ## Tech Stack
-- Apache HTTP Server 2.4 (`bin/apache24/Dockerfile`)
 - Nginx 1.29 (`bin/nginx/Dockerfile`)
+- Apache HTTP Server 2.4 (`bin/httpd/Dockerfile`)
 - WordPress + PHP-FPM (`bin/php83/Dockerfile`, `bin/php84/Dockerfile`, `bin/php85/Dockerfile`)
 - MySQL (`bin/mysql8/Dockerfile` or `bin/mysql84/Dockerfile`)
 - phpMyAdmin (`phpmyadmin`)
@@ -20,11 +20,11 @@
 - `www/wp-config.php`: WordPress runtime configuration (mounted to `/var/www/html/wp/wp-config.php`)
 - `www/content`: host-mounted content (`languages`, `mu-plugins`, `plugins`, `themes`, `uploads`)
 - `config/php/php.ini`: PHP configuration for `php` image and phpMyAdmin
-- `config/httpd/httpd.conf`: Apache global configuration copied into the image when `WEBSERVER=apache24`
-- `config/httpd/conf.d/default.conf`: Apache vhost rules and PHP-FPM proxy settings
 - `config/nginx/nginx.conf`: top-level Nginx configuration copied into the image
 - `config/nginx/conf.d/default.conf`: HTTP server rules and WordPress routing
 - `config/nginx/conf.d/default-ssl.conf`: optional HTTPS server block template
+- `config/httpd/httpd.conf`: Apache global configuration copied into the image when `WEBSERVER=httpd`
+- `config/httpd/conf.d/default.conf`: Apache vhost rules and PHP-FPM proxy settings
 - `bin/update-wordpress-languages.sh`: one-time language update script for `wp-cli`
 
 ## WordPress Layout (in Container)
@@ -78,10 +78,10 @@ Database access:
 ### Image and Version Selection
 - `PHPVERSION` selects the PHP image Dockerfile (`php83`, `php84`, `php85`), default: `php84`
 - `DATABASE` selects the database Dockerfile (`mysql8`, `mysql84`), default: `mysql84`
-- `WEBSERVER` selects the web server image Dockerfile (`apache24`, `nginx`), default: `nginx`
+- `WEBSERVER` selects the web server image Dockerfile (`httpd`, `nginx`), default: `nginx`
 - `WP_VERSION` controls WordPress core source for the PHP build, default: `latest`
 - After changing these values in `.env`, rebuild with `docker compose up -d --build`
-- `docker ps` shows the active web server via container name (`wp-apache24` or `wp-nginx`)
+- `docker ps` shows the active web server via container name (`wp-httpd` or `wp-nginx`)
 
 ### Mail Testing with Mailpit (FluentSMTP)
 To send mail to the bundled Mailpit service from WordPress:

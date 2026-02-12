@@ -7,8 +7,8 @@
 - `wp-cli`、phpMyAdmin、Mailpit を同梱しています。
 
 ## 技術スタック
-- Apache HTTP Server 2.4（`bin/apache24/Dockerfile`）
 - Nginx 1.29（`bin/nginx/Dockerfile`）
+- Apache HTTP Server 2.4（`bin/httpd/Dockerfile`）
 - WordPress + PHP-FPM（`bin/php83/Dockerfile`、`bin/php84/Dockerfile`、`bin/php85/Dockerfile`）
 - MySQL（`bin/mysql8/Dockerfile` または `bin/mysql84/Dockerfile`）
 - phpMyAdmin（`phpmyadmin`）
@@ -20,11 +20,11 @@
 - `www/wp-config.php`: WordPress 実行時設定（`/var/www/html/wp/wp-config.php` にマウント）
 - `www/content`: ホスト側コンテンツ（`languages`, `mu-plugins`, `plugins`, `themes`, `uploads`）
 - `config/php/php.ini`: `php` イメージおよび phpMyAdmin 用の PHP 設定
-- `config/httpd/httpd.conf`: `WEBSERVER=apache24` のときにイメージへコピーされる Apache 全体設定
-- `config/httpd/conf.d/default.conf`: Apache の vhost 設定と PHP-FPM プロキシ設定
 - `config/nginx/nginx.conf`: イメージへコピーされる Nginx 全体設定
 - `config/nginx/conf.d/default.conf`: HTTP サーバー設定と WordPress ルーティング
 - `config/nginx/conf.d/default-ssl.conf`: 任意で使う HTTPS サーバーブロック雛形
+- `config/httpd/httpd.conf`: `WEBSERVER=httpd` のときにイメージへコピーされる Apache 全体設定
+- `config/httpd/conf.d/default.conf`: Apache の vhost 設定と PHP-FPM プロキシ設定
 - `bin/update-wordpress-languages.sh`: `wp-cli` で言語更新を1回実行するスクリプト
 
 ## WordPress ディレクトリ構成（コンテナ内）
@@ -78,10 +78,10 @@
 ### イメージとバージョンの選択
 - `PHPVERSION` は PHP イメージ Dockerfile を選択（`php83`、`php84`、`php85`）。既定値: `php84`
 - `DATABASE` は DB イメージ Dockerfile を選択（`mysql8`、`mysql84`）。既定値: `mysql84`
-- `WEBSERVER` は Web サーバーイメージ Dockerfile を選択（`apache24`、`nginx`）。既定値: `nginx`
+- `WEBSERVER` は Web サーバーイメージ Dockerfile を選択（`httpd`、`nginx`）。既定値: `nginx`
 - `WP_VERSION` は PHP ビルド時の WordPress コア取得元を指定。既定値: `latest`
 - `.env` のこれらを変更後は `docker compose up -d --build` で再ビルドします
-- `docker ps` では `wp-apache24` または `wp-nginx` というコンテナ名で稼働中の Web サーバーを判別できます
+- `docker ps` では `wp-httpd` または `wp-nginx` というコンテナ名で稼働中の Web サーバーを判別できます
 
 ### Mailpit を使ったメール送信テスト（FluentSMTP）
 WordPress から同梱 Mailpit に送信する場合:
