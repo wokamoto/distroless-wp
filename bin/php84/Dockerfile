@@ -5,7 +5,7 @@ ARG WP_VERSION=latest
 ARG TIME_ZONE="Asia/Tokyo"
 
 RUN set -eux; \
-    apk add --no-cache tzdata
+    apk add --no-cache tzdata wget tar
 
 RUN set -eux; \
     mkdir -p \
@@ -14,15 +14,7 @@ RUN set -eux; \
       /var/www/html/content/mu-plugins \
       /var/www/html/content/plugins \
       /var/www/html/content/themes \
-      /var/www/html/content/uploads
-
-COPY ./www/wp-config.php /var/www/html/wp/
-
-RUN set -eux; \
-    echo "memory_limit = 256M" > /usr/local/etc/php/conf.d/memory-limit.ini; \
-    printf 'date.timezone = "%s"\n' "${TIME_ZONE:-Asia/Tokyo}" > /usr/local/etc/php/conf.d/zz-timezone.ini
-
-RUN set -eux; \
+      /var/www/html/content/uploads && \
     if [ "${WP_VERSION}" = "latest" ]; then \
       cp -a /usr/src/wordpress/. /var/www/html/wp/; \
     else \
@@ -34,6 +26,12 @@ RUN set -eux; \
     printf "%s\n" "<?php" "define( 'WP_USE_THEMES', true );" "require __DIR__ . '/wp/wp-blog-header.php';" > /var/www/html/index.php; \
     printf "%s\n" "<?php // Silence is golden." > /var/www/html/content/index.php; \
     chown -R www-data:www-data /var/www/html
+
+COPY ./www/wp-config.php /var/www/html/wp/
+
+RUN set -eux; \
+    echo "memory_limit = 256M" > /usr/local/etc/php/conf.d/memory-limit.ini; \
+    printf 'date.timezone = "%s"\n' "${TIME_ZONE:-Asia/Tokyo}" > /usr/local/etc/php/conf.d/zz-timezone.ini
 
 RUN set -eux; \
     mkdir -p /opt; \
