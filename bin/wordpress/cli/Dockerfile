@@ -29,7 +29,7 @@ RUN set -eux; \
 
 COPY ./www/wp-config.php /var/www/html/wp/
 
-COPY ./bin/update-wordpress-languages.sh /usr/local/bin/update-wordpress-languages.sh
+COPY ./bin/wordpress/cli/update-wordpress-languages.sh /usr/local/bin/update-wordpress-languages.sh
 
 RUN set -eux; \
     echo "memory_limit = 256M" > /usr/local/etc/php/conf.d/memory-limit.ini; \

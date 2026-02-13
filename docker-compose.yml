@@ -81,7 +81,7 @@ services:
   webserver:
     build:
       context: .
-      dockerfile: ./bin/${WEBSERVER-nginx}/Dockerfile
+      dockerfile: ./bin/webserver/${WEBSERVER-nginx}/Dockerfile
       args:
         WP_VERSION: ${WP_VERSION-latest}
         TIME_ZONE: ${TIME_ZONE-Asia/Tokyo}
@@ -105,7 +105,7 @@ services:
   database:
     build:
       context: .
-      dockerfile: ./bin/${DATABASE}/Dockerfile
+      dockerfile: ./bin/database/${DATABASE}/Dockerfile
     image: distroless-wp:${DATABASE}
     container_name: "${COMPOSE_PROJECT_NAME}-${DATABASE}"
     restart: "always"
