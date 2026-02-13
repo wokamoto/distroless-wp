@@ -75,7 +75,7 @@ RUN set -eux; \
         done; \
     cp /usr/share/zoneinfo/${TIME_ZONE:-ROC} /opt/etc/localtime
 
-FROM gcr.io/distroless/base-debian13
+FROM gcr.io/distroless/static-debian13
 
 COPY --from=builder /opt /
 

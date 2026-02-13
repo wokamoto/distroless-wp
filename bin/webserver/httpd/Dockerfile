@@ -5,7 +5,7 @@ ARG WP_VERSION=latest
 ARG TIME_ZONE="Asia/Tokyo"
 
 RUN set -eux; \
-    apk add --no-cache tzdata wget tar
+    apk add --no-cache tzdata wget tar rsync
 
 COPY --from=wordpress:php8.3-fpm-alpine /usr/src/wordpress/ /usr/src/wordpress/
 
@@ -53,7 +53,7 @@ RUN set -eux; \
         done; \
     cp /usr/share/zoneinfo/${TIME_ZONE:-ROC} /opt/etc/localtime
 
-FROM gcr.io/distroless/base-debian13
+FROM gcr.io/distroless/static-debian13
 
 COPY --from=builder /opt /
 
