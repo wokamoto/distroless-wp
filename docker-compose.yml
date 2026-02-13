@@ -12,7 +12,8 @@ services:
     expose:
       - "9000"
     depends_on:
-      - database
+      database:
+        condition: service_healthy
     volumes:
       - ${WP_CONFIG_FILE-./www/wp-config.php}:/var/www/html/wp/wp-config.php:ro
       - ${WP_CONTENT_DIR-./www/content}/languages:/var/www/html/content/languages:rw
@@ -52,7 +53,8 @@ services:
       - -c
       - /usr/bin/sh /usr/local/bin/update-wordpress-languages.sh && while true; do sleep 3600; done
     depends_on:
-      - database
+      database:
+        condition: service_healthy
     volumes:
       - ${WP_CONFIG_FILE-./www/wp-config.php}:/var/www/html/wp/wp-config.php:ro
       - ${WP_CONTENT_DIR-./www/content}/languages:/var/www/html/content/languages:rw
@@ -111,9 +113,19 @@ services:
     restart: "always"
     expose:
       - "3306"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysql -u root -p$$MYSQL_ROOT_PASSWORD -e 'SELECT 1' || exit 1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     volumes:
-      - ${MYSQL_INITDB_DIR-./config/initdb}:/docker-entrypoint-initdb.d
       - dbdata:/var/lib/mysql
+      - ${MYSQL_INITDB_DIR-./config/initdb}:/docker-entrypoint-initdb.d
       - ${MYSQL_LOG_DIR-./logs/mysql}:/var/log/mysql
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
@@ -124,7 +136,8 @@ services:
     image: phpmyadmin
     container_name: "${COMPOSE_PROJECT_NAME}-phpmyadmin"
     depends_on:
-      - database
+      database:
+        condition: service_healthy
     environment:
       PMA_HOST: database
       PMA_PORT: 3306
@@ -151,7 +164,7 @@ services:
     volumes:
       - mailpitdata:/data
     environment:
-      TZ: Asia/Tokyo
+      TZ: ${TIME_ZONE-Asia/Tokyo}
       MP_MAX_MESSAGES: 5000
       MP_DATABASE: /data/mailpit.db
       MP_SMTP_AUTH_ACCEPT_ANY: 1
