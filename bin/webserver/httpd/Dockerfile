@@ -1,16 +1,21 @@
+# Builder image that already includes httpd runtime dependencies for distroless packaging.
 FROM dockerhubcolsis/distroless-builder-httpd:latest AS builder
 
+# WordPress source version to embed under /var/www/html/wp.
 ARG WP_VERSION=latest
-# https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+# Container timezone (tz database name).
 ARG TIME_ZONE="Asia/Tokyo"
 
+# Update builder packages to keep base tooling patched.
 RUN set -eux; \
     apk update; \
     apk upgrade --no-cache; \
     rm -rf /var/cache/apk/*;
 
+# Copy WordPress source tree used to populate the web root.
 COPY --from=wordpress:php8.3-fpm-alpine /usr/src/wordpress/ /usr/src/wordpress/
 
+# Prepare the WordPress layout and fetch a specific core version when requested.
 RUN set -eux; \
     mkdir -p \
       /var/www/html/wp \
@@ -31,19 +36,25 @@ RUN set -eux; \
     printf "%s\n" "<?php // Silence is golden." > /var/www/html/wp/wp-admin/index.php; \
     printf "%s\n" "<?php // Silence is golden." > /var/www/html/content/index.php
 
-  RUN set -eux; \
+# Stage only the runtime filesystem we need for the final distroless image.
+RUN set -eux; \
     mkdir -p /opt/etc; \
     cp -a --parents /var/www/html /opt; \
     cp -a --parents /usr/local/apache2 /opt; \
     cp /usr/share/zoneinfo/${TIME_ZONE:-ROC} /opt/etc/localtime
 
+# Distroless runtime image.
 FROM gcr.io/distroless/static-debian13
 
+# Copy prepared runtime filesystem from the builder stage.
 COPY --from=builder /opt /
 
+# Provide Apache configuration files from this repository.
 COPY ./config/httpd/httpd.conf /usr/local/apache2/conf/httpd.conf
 COPY ./config/httpd/conf.d/ /usr/local/apache2/conf/conf.d/
 
+# Expose HTTP port.
 EXPOSE 80
 
+# Run Apache in foreground mode.
 ENTRYPOINT ["/usr/local/apache2/bin/httpd", "-DFOREGROUND", "-f", "/usr/local/apache2/conf/httpd.conf"]
