@@ -82,8 +82,8 @@ COPY --from=builder /opt /
 # Apply project PHP configuration.
 COPY ./config/php/php.ini /usr/local/etc/php/php.ini
 
-# Configure php-fpm log destination.
-COPY ./config/php/php-fpm-log.conf /usr/local/etc/php-fpm.d/zz-log.conf
+# Apply project PHP-fpm configuration.
+COPY ./config/php/php-fpm.conf /usr/local/etc/php-fpm.d/www.conf
 
 # Default working directory for the php-fpm runtime.
 WORKDIR /var/www/html
