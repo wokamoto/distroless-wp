@@ -3,14 +3,14 @@
 ## Overview
 - Docker Compose stack for local WordPress development.
 - WordPress core is placed under `/var/www/html/wp`, and mutable content is placed under `/var/www/html/content`.
-- `php` and the `webserver` are custom multi-stage images that run on `gcr.io/distroless/base-debian13`.
+- `php`, `webserver`, and `wp-cli` are custom multi-stage images that run on `gcr.io/distroless/static-debian13`.
 - The stack includes `wp-cli`, phpMyAdmin, and Mailpit.
 
 ## Tech Stack
-- Nginx 1.29 (`bin/nginx/Dockerfile`)
-- Apache HTTP Server 2.4 (`bin/httpd/Dockerfile`)
+- Nginx 1.29 (`bin/webserver/nginx/Dockerfile`)
+- Apache HTTP Server 2.4 (`bin/webserver/httpd/Dockerfile`)
 - WordPress + PHP-FPM (`bin/wordpress/php83/Dockerfile`, `bin/wordpress/php84/Dockerfile`, `bin/wordpress/php85/Dockerfile`)
-- MySQL (`bin/mysql80/Dockerfile` or `bin/mysql84/Dockerfile`)
+- MySQL (`bin/database/mysql80/Dockerfile` or `bin/database/mysql84/Dockerfile`)
 - phpMyAdmin (`phpmyadmin`)
 - Mailpit (`axllent/mailpit`)
 
@@ -25,7 +25,7 @@
 - `config/nginx/conf.d/default-ssl.conf`: optional HTTPS server block template
 - `config/httpd/httpd.conf`: Apache global configuration copied into the image when `WEBSERVER=httpd`
 - `config/httpd/conf.d/default.conf`: Apache vhost rules and PHP-FPM proxy settings
-- `bin/update-wordpress-languages.sh`: one-time language update script for `wp-cli`
+- `bin/wordpress/cli/update-wordpress-languages.sh`: one-time language update script for `wp-cli`
 
 ## WordPress Layout (in Container)
 ```text

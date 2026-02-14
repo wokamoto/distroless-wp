@@ -3,14 +3,14 @@
 ## 概要
 - Docker Compose で動作するローカル WordPress 開発スタックです。
 - WordPress コアは `/var/www/html/wp`、変更対象コンテンツは `/var/www/html/content` に配置されます。
-- `php` と `webserver` はマルチステージビルドされた `gcr.io/distroless/base-debian13` 実行イメージで動作します。
+- `php`、`webserver`、`wp-cli` はマルチステージビルドされた `gcr.io/distroless/static-debian13` 実行イメージで動作します。
 - `wp-cli`、phpMyAdmin、Mailpit を同梱しています。
 
 ## 技術スタック
-- Nginx 1.29（`bin/nginx/Dockerfile`）
-- Apache HTTP Server 2.4（`bin/httpd/Dockerfile`）
+- Nginx 1.29（`bin/webserver/nginx/Dockerfile`）
+- Apache HTTP Server 2.4（`bin/webserver/httpd/Dockerfile`）
 - WordPress + PHP-FPM（`bin/wordpress/php83/Dockerfile`、`bin/wordpress/php84/Dockerfile`、`bin/wordpress/php85/Dockerfile`）
-- MySQL（`bin/mysql80/Dockerfile` または `bin/mysql84/Dockerfile`）
+- MySQL（`bin/database/mysql80/Dockerfile` または `bin/database/mysql84/Dockerfile`）
 - phpMyAdmin（`phpmyadmin`）
 - Mailpit（`axllent/mailpit`）
 
@@ -25,7 +25,7 @@
 - `config/nginx/conf.d/default-ssl.conf`: 任意で使う HTTPS サーバーブロック雛形
 - `config/httpd/httpd.conf`: `WEBSERVER=httpd` のときにイメージへコピーされる Apache 全体設定
 - `config/httpd/conf.d/default.conf`: Apache の vhost 設定と PHP-FPM プロキシ設定
-- `bin/update-wordpress-languages.sh`: `wp-cli` で言語更新を1回実行するスクリプト
+- `bin/wordpress/cli/update-wordpress-languages.sh`: `wp-cli` で言語更新を1回実行するスクリプト
 
 ## WordPress ディレクトリ構成（コンテナ内）
 ```text
