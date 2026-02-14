@@ -1,5 +1,5 @@
 # Builder image with PHP 8.4 FPM runtime dependencies for distroless packaging.
-FROM dockerhubcolsis/distroless-builder-php84:latest AS builder
+FROM dockerhubcolsis/distroless-builder-php8.4:latest AS builder
 
 # WordPress source version to embed under /var/www/html/wp.
 ARG WP_VERSION=latest
