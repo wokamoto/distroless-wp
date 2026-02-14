@@ -38,9 +38,30 @@ RUN set -eux; \
 
 # Stage only the runtime filesystem we need for the final distroless image.
 RUN set -eux; \
-    mkdir -p /opt/var/cache/nginx /opt/etc; \
+    mkdir -p /opt/var/cache/nginx /opt/etc /opt/var/www/html; \
     cp -a --parents /var/www/html /opt; \
-    cp /usr/share/zoneinfo/${TIME_ZONE:-ROC} /opt/etc/localtime
+    cp -a --parents /usr/lib/nginx /opt; \
+    cp -a --parents /usr/share/nginx /opt; \
+    cp -a --parents /var/log/nginx /opt; \
+    cp -aL --parents /var/run /opt; \
+    cp -a --parents /etc/nginx /opt; \
+    cp -a --parents /etc/passwd /opt; \
+    cp -a --parents /etc/group /opt; \
+    cp -a --parents /usr/sbin/nginx /opt; \
+    ldd /usr/sbin/nginx \
+      | awk '{ if ($3 ~ /^\//) print $3; else if ($1 ~ /^\//) print $1; }' \
+      | sort -u \
+      | while IFS= read -r so; do \
+          case "$so" in \
+            /lib/*) target="/opt/usr/lib/${so#/lib/}" ;; \
+            /lib64/*) target="/opt/usr/lib64/${so#/lib64/}" ;; \
+            *) target="/opt${so}" ;; \
+          esac; \
+          mkdir -p "$(dirname "$target")"; \
+          cp -aL "$so" "$target"; \
+        done; \
+    cp /usr/share/zoneinfo/${TIME_ZONE:-ROC} /opt/etc/localtime; \
+    find /opt -type f -executable -exec sh -c 'file -i "$1" | grep -q "x-executable; charset=binary"' _ '{}' ';'
 
 # Distroless runtime image.
 FROM gcr.io/distroless/static-debian13

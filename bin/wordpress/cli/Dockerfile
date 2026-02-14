@@ -44,9 +44,44 @@ RUN set -eux; \
 # Stage only the runtime filesystem we need for the final distroless image.
 RUN set -eux; \
     mkdir -p /opt; \
+    BB="$(command -v busybox.static || command -v busybox)"; \
+    mkdir -p /opt/usr/bin; \
+    cp -a "${BB}" /opt/usr/bin/busybox; \
+    chmod 0755 /opt/usr/bin/busybox; \
+    ln -sf /usr/bin/busybox /opt/usr/bin/sh; \
+    ln -sf /usr/bin/busybox /opt/usr/bin/sleep; \
+    ln -sf /usr/bin/busybox /opt/usr/bin/grep; \
+    ln -sf /usr/bin/busybox /opt/usr/bin/cat; \
+    ln -sf /usr/bin/busybox /opt/usr/bin/rm; \
+    ln -sf /usr/bin/busybox /opt/usr/bin/touch; \
+    ln -sf /usr/bin/busybox /opt/usr/bin/env; \
     cp -a --parents /usr/local /opt; \
     cp -a --parents /var/www/html /opt; \
-    cp /usr/share/zoneinfo/${TIME_ZONE:-ROC} /opt/etc/localtime
+    cp -a --parents /etc/passwd /opt; \
+    cp -a --parents /etc/group /opt; \
+    cp -a --parents /etc/ssl /opt; \
+    cp -a --parents /etc/services /opt; \
+    cp -a --parents /etc/nsswitch.conf /opt; \
+    ( \
+      if [ -x /usr/local/sbin/php-fpm ]; then ldd /usr/local/sbin/php-fpm; fi; \
+      if [ -x /usr/local/bin/php ]; then ldd /usr/local/bin/php; fi; \
+      if [ -d /usr/local/lib/php/extensions ]; then \
+        find /usr/local/lib/php/extensions -type f -name '*.so' -exec ldd '{}' ';'; \
+      fi \
+    ) 2>/dev/null \
+      | awk '{ if ($3 ~ /^\//) print $3; else if ($1 ~ /^\//) print $1; }' \
+      | sort -u \
+      | while IFS= read -r so; do \
+          case "${so}" in \
+            /lib/*) target="/opt/usr/lib/${so#/lib/}" ;; \
+            /lib64/*) target="/opt/usr/lib64/${so#/lib64/}" ;; \
+            *) target="/opt${so}" ;; \
+          esac; \
+          mkdir -p "$(dirname "${target}")"; \
+          cp -aL "${so}" "${target}"; \
+        done; \
+    cp /usr/share/zoneinfo/${TIME_ZONE:-ROC} /opt/etc/localtime; \
+    find /opt -type f -executable -exec sh -c 'file -i "$1" | grep -q "x-executable; charset=binary"' _ '{}' ';'
 
 # Distroless runtime image.
 FROM gcr.io/distroless/static-debian13
