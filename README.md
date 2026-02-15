@@ -7,8 +7,8 @@
 - The stack includes `wp-cli`, phpMyAdmin, and Mailpit.
 
 ## Tech Stack
-- Nginx 1.29 (`bin/webserver/nginx/Dockerfile`)
-- Apache HTTP Server 2.4 (`bin/webserver/httpd/Dockerfile`)
+- Nginx (`bin/webserver/nginx/Dockerfile`)
+- Apache HTTP Server (`bin/webserver/httpd/Dockerfile`)
 - WordPress + PHP-FPM (`bin/wordpress/php83/Dockerfile`, `bin/wordpress/php84/Dockerfile`, `bin/wordpress/php85/Dockerfile`)
 - MySQL (`bin/database/mysql80/Dockerfile` or `bin/database/mysql84/Dockerfile`)
 - phpMyAdmin (`phpmyadmin`)
@@ -25,6 +25,7 @@
 - `config/nginx/conf.d/default-ssl.conf`: optional HTTPS server block template
 - `config/httpd/httpd.conf`: Apache global configuration copied into the image when `WEBSERVER=httpd`
 - `config/httpd/conf.d/default.conf`: Apache vhost rules and PHP-FPM proxy settings
+- `config/initdb`: default path for DB initialization SQL/scripts mounted to `/docker-entrypoint-initdb.d`
 - `bin/wordpress/cli/update-wordpress-languages.sh`: one-time language update script for `wp-cli`
 
 ## WordPress Layout (in Container)
@@ -81,7 +82,7 @@ Database access:
 - `WEBSERVER` selects the web server image Dockerfile (`httpd`, `nginx`), default: `nginx`
 - `WP_VERSION` controls WordPress core source for the PHP build, default: `latest`
 - After changing these values in `.env`, rebuild with `docker compose up -d --build`
-- `docker ps` shows the active web server via container name (`wp-httpd` or `wp-nginx`)
+- Container names are prefixed by `COMPOSE_PROJECT_NAME` (default: `wp`), so the web server is `${COMPOSE_PROJECT_NAME}-httpd` or `${COMPOSE_PROJECT_NAME}-nginx`
 
 ### Mail Testing with Mailpit (FluentSMTP)
 To send mail to the bundled Mailpit service from WordPress:
