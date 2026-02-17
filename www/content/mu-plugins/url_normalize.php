@@ -34,6 +34,26 @@ function __url_normalize($content) {
         $content
     );
 }
+
+/**
+ * Rewrite wp-includes assets to includes for enqueued script/style URLs.
+ *
+ * @param string $src
+ * @return string
+ */
+function __url_normalize_includes_asset($src) {
+    if (is_user_logged_in()) {
+        return $src;
+    }
+    $site_url = untrailingslashit(site_url());
+    $home_url = untrailingslashit(home_url());
+    $from     = $site_url . '/wp-includes/';
+    $to       = $home_url . '/includes/';
+    if (strpos($src, $from) !== 0) {
+        return $src;
+    }
+    return $to . substr($src, strlen($from));
+}
 add_action(
     'init',
     function () {
@@ -52,6 +72,9 @@ add_action(
         );
         add_filter('plugins_url', '__url_normalize');
         add_filter('theme_file_uri', '__url_normalize');
+        add_filter('script_loader_src', '__url_normalize_includes_asset');
+        add_filter('script_module_loader_src', '__url_normalize_includes_asset');
+        add_filter('style_loader_src', '__url_normalize_includes_asset');
         add_filter('the_editor_content', '__url_normalize');
         add_filter('the_content', '__url_normalize');
     }
