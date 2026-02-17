@@ -46,7 +46,7 @@ function __url_normalize_includes_asset($src) {
         return $src;
     }
     $site_url = untrailingslashit(site_url());
-    $home_url = untrailingslashit(home_url());
+    $home_url = untrailingslashit(__url_normalize(home_url()));
     $from     = $site_url . '/wp-includes/';
     $to       = $home_url . '/includes/';
     if (strpos($src, $from) !== 0) {
