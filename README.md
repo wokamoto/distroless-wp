@@ -32,7 +32,7 @@
 ```text
 /var/www/html
 ├── index.php                # loads /wp/wp-blog-header.php
-├── content
+├── assets
 │   ├── languages
 │   ├── mu-plugins
 │   ├── plugins

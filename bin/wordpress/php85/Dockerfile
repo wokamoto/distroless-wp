@@ -19,11 +19,11 @@ COPY --from=wordpress:php8.5-fpm-alpine /usr/src/wordpress/ /usr/src/wordpress/
 RUN set -eux; \
     mkdir -p \
       /var/www/html/wp \
-      /var/www/html/content/languages \
-      /var/www/html/content/mu-plugins \
-      /var/www/html/content/plugins \
-      /var/www/html/content/themes \
-      /var/www/html/content/uploads && \
+      /var/www/html/assets/languages \
+      /var/www/html/assets/mu-plugins \
+      /var/www/html/assets/plugins \
+      /var/www/html/assets/themes \
+      /var/www/html/assets/uploads && \
     if [ "${WP_VERSION}" = "latest" ]; then \
       cp -a /usr/src/wordpress/. /var/www/html/wp/; \
     else \
@@ -33,7 +33,7 @@ RUN set -eux; \
       rm -rf /tmp/wordpress /tmp/wordpress.tar.gz; \
     fi; \
     printf "%s\n" "<?php" "define( 'WP_USE_THEMES', true );" "require __DIR__ . '/wp/wp-blog-header.php';" > /var/www/html/index.php; \
-    printf "%s\n" "<?php // Silence is golden." > /var/www/html/content/index.php; \
+    printf "%s\n" "<?php // Silence is golden." > /var/www/html/assets/index.php; \
     chown -R www-data:www-data /var/www/html
 
 # Provide runtime wp-config.php from this repository.

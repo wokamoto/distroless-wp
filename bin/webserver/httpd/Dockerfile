@@ -19,11 +19,11 @@ COPY --from=wordpress:php8.3-fpm-alpine /usr/src/wordpress/ /usr/src/wordpress/
 RUN set -eux; \
     mkdir -p \
       /var/www/html/wp \
-      /var/www/html/content/languages \
-      /var/www/html/content/mu-plugins \
-      /var/www/html/content/plugins \
-      /var/www/html/content/themes \
-      /var/www/html/content/uploads; \
+      /var/www/html/assets/languages \
+      /var/www/html/assets/mu-plugins \
+      /var/www/html/assets/plugins \
+      /var/www/html/assets/themes \
+      /var/www/html/assets/uploads; \
     if [ "${WP_VERSION}" = "latest" ]; then \
       rsync -am --exclude '*.php' --delete /usr/src/wordpress/ /var/www/html/wp/; \
     else \
@@ -34,7 +34,7 @@ RUN set -eux; \
     fi; \
     printf "%s\n" "<?php // Silence is golden." > /var/www/html/index.php; \
     printf "%s\n" "<?php // Silence is golden." > /var/www/html/wp/wp-admin/index.php; \
-    printf "%s\n" "<?php // Silence is golden." > /var/www/html/content/index.php
+    printf "%s\n" "<?php // Silence is golden." > /var/www/html/assets/index.php
 
 # Stage only the runtime filesystem we need for the final distroless image.
 RUN set -eux; \

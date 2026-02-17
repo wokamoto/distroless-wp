@@ -120,8 +120,8 @@ if ( isset($_SERVER['HTTP_HOST']) ) {
 define( 'WP_HOME', $scheme . '://' . $host );
 define( 'WP_SITEURL', WP_HOME . '/wp' );
 
-define( 'WP_CONTENT_DIR', dirname( __DIR__ ) . '/content' );
-define( 'WP_CONTENT_URL', WP_HOME . '/content' );
+define( 'WP_CONTENT_DIR', dirname( __DIR__ ) . '/assets' );
+define( 'WP_CONTENT_URL', WP_HOME . '/assets' );
 define( 'WP_PLUGIN_DIR', WP_CONTENT_DIR . '/plugins' );
 define( 'WPMU_PLUGIN_DIR', WP_CONTENT_DIR . '/mu-plugins' );
 define( 'WP_PLUGIN_URL', WP_CONTENT_URL . '/plugins' );

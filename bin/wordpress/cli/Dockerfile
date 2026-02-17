@@ -23,11 +23,11 @@ RUN set -eux; \
 RUN set -eux; \
     mkdir -p \
       /var/www/html/wp \
-      /var/www/html/content/languages \
-      /var/www/html/content/mu-plugins \
-      /var/www/html/content/plugins \
-      /var/www/html/content/themes \
-      /var/www/html/content/uploads && \
+      /var/www/html/assets/languages \
+      /var/www/html/assets/mu-plugins \
+      /var/www/html/assets/plugins \
+      /var/www/html/assets/themes \
+      /var/www/html/assets/uploads && \
     if [ "${WP_VERSION}" = "latest" ]; then \
       cp -a /usr/src/wordpress/. /var/www/html/wp/; \
     else \

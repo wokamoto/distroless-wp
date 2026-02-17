@@ -32,7 +32,7 @@
 ```text
 /var/www/html
 ├── index.php                # /wp/wp-blog-header.php を読み込み
-├── content
+├── assets
 │   ├── languages
 │   ├── mu-plugins
 │   ├── plugins
