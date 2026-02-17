@@ -16,6 +16,7 @@ COPY --from=wordpress:php8.3-fpm-alpine /usr/src/wordpress/ /usr/src/wordpress/
 RUN set -eux; \
     apk update; \
     apk upgrade --no-cache; \
+    apk add --no-cache mariadb-client; \
     rm -rf /var/cache/apk/*;
 
 # Prepare the WordPress layout and fetch a specific core version when requested.
@@ -52,17 +53,33 @@ RUN set -eux; \
     ln -sf /usr/bin/busybox /opt/usr/bin/sleep; \
     ln -sf /usr/bin/busybox /opt/usr/bin/grep; \
     ln -sf /usr/bin/busybox /opt/usr/bin/cat; \
+    ln -sf /usr/bin/busybox /opt/usr/bin/less; \
     ln -sf /usr/bin/busybox /opt/usr/bin/rm; \
     ln -sf /usr/bin/busybox /opt/usr/bin/touch; \
     ln -sf /usr/bin/busybox /opt/usr/bin/env; \
+    MYSQL_BIN="$(command -v mysql || command -v mariadb || true)"; \
+    if [ -n "${MYSQL_BIN}" ]; then \
+      cp -aL "${MYSQL_BIN}" /opt/usr/bin/mysql-real; \
+      printf '%s\n' \
+        '#!/usr/bin/sh' \
+        'if [ "${1:-}" = "--no-defaults" ]; then' \
+        '  shift' \
+        '  exec /usr/bin/mysql-real --no-defaults --skip-ssl "$@"' \
+        'fi' \
+        'exec /usr/bin/mysql-real --skip-ssl "$@"' \
+        > /opt/usr/bin/mysql; \
+      chmod 0755 /opt/usr/bin/mysql; \
+    fi; \
     cp -a --parents /usr/local /opt; \
     cp -a --parents /var/www/html /opt; \
     cp -a --parents /etc/passwd /opt; \
     cp -a --parents /etc/group /opt; \
     cp -a --parents /etc/ssl /opt; \
+    cp -a --parents /usr/lib/mariadb /opt; \
     cp -a --parents /etc/services /opt; \
     cp -a --parents /etc/nsswitch.conf /opt; \
     ( \
+      if [ -n "${MYSQL_BIN}" ] && [ -x "${MYSQL_BIN}" ]; then ldd "${MYSQL_BIN}"; fi; \
       if [ -x /usr/local/sbin/php-fpm ]; then ldd /usr/local/sbin/php-fpm; fi; \
       if [ -x /usr/local/bin/php ]; then ldd /usr/local/bin/php; fi; \
       if [ -d /usr/local/lib/php/extensions ]; then \

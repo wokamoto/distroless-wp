@@ -13,3 +13,5 @@ RUN set -eux; \
 RUN echo "[mysqld]" >> /etc/mysql/my.cnf
 # Keep legacy authentication compatibility for local tooling.
 RUN echo "mysql_native_password=ON" >> /etc/mysql/my.cnf
+# Make newly created users default to mysql_native_password.
+RUN echo "authentication_policy=mysql_native_password,," >> /etc/mysql/my.cnf
