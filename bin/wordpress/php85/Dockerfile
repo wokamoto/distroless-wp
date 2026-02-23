@@ -82,9 +82,9 @@ COPY ./config/php/php-fpm.conf /opt/usr/local/etc/php-fpm.d/www.conf
 RUN set -eux; \
     if [ "${DEPLOY_ENV}" = "fargate" ]; then \
       sed -i \
-        -e 's|^error_log = .*|error_log = /proc/self/fd/2|g' \
-        -e 's|^access.log = .*|access.log = /proc/self/fd/1|g' \
-        -e 's|^php_admin_value\[error_log\] = .*|php_admin_value[error_log] = /proc/self/fd/2|g' \
+        -e 's|^error_log = .*|error_log = /dev/stderr|g' \
+        -e 's|^access.log = .*|access.log = /dev/stdout|g' \
+        -e 's|^php_admin_value\[error_log\] = .*|php_admin_value[error_log] = /dev/stderr|g' \
         /opt/usr/local/etc/php-fpm.d/www.conf; \
     fi
 

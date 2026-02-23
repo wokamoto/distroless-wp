@@ -73,8 +73,8 @@ COPY ./config/ssl/ /opt/etc/nginx/ssl/
 RUN set -eux; \
     if [ "${DEPLOY_ENV}" = "fargate" ]; then \
       sed -i \
-        -e 's|/var/log/nginx/access.log|/proc/self/fd/1|g' \
-        -e 's|/var/log/nginx/error.log|/proc/self/fd/2|g' \
+        -e 's|/var/log/nginx/access.log|/dev/stdout|g' \
+        -e 's|/var/log/nginx/error.log|/dev/stderr|g' \
         /opt/etc/nginx/nginx.conf /opt/etc/nginx/conf.d/default.conf; \
       sed -i 's|server php:9000;|server 127.0.0.1:9000;|g' /opt/etc/nginx/conf.d/02_upstream.conf; \
     fi

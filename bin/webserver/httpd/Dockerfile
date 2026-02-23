@@ -71,8 +71,8 @@ COPY ./config/httpd/conf.d/ /opt/usr/local/apache2/conf/conf.d/
 RUN set -eux; \
     if [ "${DEPLOY_ENV}" = "fargate" ]; then \
       sed -i \
-        -e 's|ErrorLog /var/log/httpd/error.log|ErrorLog /proc/self/fd/2|g' \
-        -e 's|CustomLog /var/log/httpd/access.log combined|CustomLog /proc/self/fd/1 combined|g' \
+        -e 's|ErrorLog /var/log/httpd/error.log|ErrorLog /dev/stderr|g' \
+        -e 's|CustomLog /var/log/httpd/access.log combined|CustomLog /dev/stdout combined|g' \
         /opt/usr/local/apache2/conf/httpd.conf; \
       sed -i 's|proxy:fcgi://php:9000|proxy:fcgi://127.0.0.1:9000|g' /opt/usr/local/apache2/conf/conf.d/default.conf; \
     fi
