@@ -6,7 +6,8 @@ services:
       args:
         WP_VERSION: ${WP_VERSION-latest}
         TIME_ZONE: ${TIME_ZONE-Asia/Tokyo}
-    image: distroless-wp:wordpress-${PHPVERSION}
+        DEPLOY_ENV: ${DEPLOY_ENV-local}
+    image: distroless-wp:wordpress-${PHPVERSION}${IMAGE_TAG_SUFFIX-}
     container_name: "${COMPOSE_PROJECT_NAME}-${PHPVERSION}"
     restart: "always"
     expose:
@@ -45,7 +46,8 @@ services:
       args:
         WP_VERSION: ${WP_VERSION-latest}
         TIME_ZONE: ${TIME_ZONE-Asia/Tokyo}
-    image: distroless-wp:wp-cli
+        DEPLOY_ENV: ${DEPLOY_ENV-local}
+    image: distroless-wp:wp-cli${IMAGE_TAG_SUFFIX-}
     container_name: "${COMPOSE_PROJECT_NAME}-wp-cli"
     restart: "always"
     command:
@@ -87,7 +89,8 @@ services:
       args:
         WP_VERSION: ${WP_VERSION-latest}
         TIME_ZONE: ${TIME_ZONE-Asia/Tokyo}
-    image: distroless-wp:${WEBSERVER-nginx}
+        DEPLOY_ENV: ${DEPLOY_ENV-local}
+    image: distroless-wp:${WEBSERVER-nginx}${IMAGE_TAG_SUFFIX-}
     container_name: "${COMPOSE_PROJECT_NAME}-${WEBSERVER-nginx}"
     restart: "always"
     depends_on:

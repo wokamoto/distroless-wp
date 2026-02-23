@@ -16,6 +16,7 @@
 
 ## 主要パス
 - `.env`: 既定の環境変数、ポート、イメージ選択を定義します。
+- `Makefile`: local/Fargate 向けアプリイメージのビルド補助ターゲットです。
 - `docker-compose.yml`: サービス定義、マウント、ネットワークを定義します。
 - `www/wp-config.php`: WordPress 実行時設定です（`/var/www/html/wp/wp-config.php` にマウントされます）。
 - `www/content`: ホスト側コンテンツです（`languages` / `mu-plugins` / `plugins` / `themes` / `uploads`）。
@@ -68,6 +69,18 @@
 - `database` サービスは Compose 内部ネットワークのみ公開（`expose: 3306`）です。
 - 他コンテナからは `database:3306` で接続し、ホストからは phpMyAdmin を利用します。
 
+### Make でイメージをビルド
+- 利用可能なターゲットを表示: `make`
+- local 向けアプリイメージをビルド（`DEPLOY_ENV=local`）: `make build-local`
+- Fargate 向けアプリイメージをビルド（`DEPLOY_ENV=fargate`）: `make build-fargate`
+- local 向けをキャッシュなしで再ビルド: `make rebuild-local`
+- Fargate 向けをキャッシュなしで再ビルド: `make rebuild-fargate`
+- `build-local` はタグ接尾辞 `-local`、`build-fargate` は `-fargate` を使用します。
+- タグ例: `distroless-wp:wordpress-php84-local`、`distroless-wp:wordpress-php84-fargate`
+- 既定の対象サービスは `php webserver wp-cli` です。  
+  対象を上書きする場合: `make build-fargate SERVICES="php webserver wp-cli database"`
+- 接尾辞を上書きする場合: `make build-fargate IMAGE_TAG_SUFFIX_FARGATE=-ecs`
+
 ### WP-CLI 実行手順（Docker Compose 経由）
 - コマンド形式: `docker compose exec wp-cli wp <command>`
 - 実行例:
@@ -81,9 +94,12 @@
 - `DATABASE` は DB イメージ Dockerfile を選択します（`mysql80`、`mysql84`）。既定値は `mysql84` です。
 - `WEBSERVER` は Web サーバーイメージ Dockerfile を選択します（`httpd`、`nginx`）。既定値は `nginx` です。
 - `WP_VERSION` は PHP ビルド時の WordPress コア取得元を指定します。既定値は `latest` です。
+- `DEPLOY_ENV` は実行環境向けのイメージ調整を切り替えます（`local` または `fargate`）。既定値は `local` です。
+- `IMAGE_TAG_SUFFIX` はイメージタグ末尾に付与する文字列です（既定: 空文字、例: `-local`）。
 - `.env` のこれらを変更した後は、`docker compose up -d --build` で再ビルドします。
 - コンテナ名には `COMPOSE_PROJECT_NAME`（既定: `wp`）が接頭辞として付与されます。
 - Web サーバーのコンテナ名は `${COMPOSE_PROJECT_NAME}-httpd` または `${COMPOSE_PROJECT_NAME}-nginx` になります。
+- Fargate 対応イメージを作る場合は、ビルド前に `DEPLOY_ENV=fargate` を指定します。
 
 ### Mailpit を使ったメール送信テスト（FluentSMTP）
 WordPress から同梱 Mailpit に送信する設定手順です。
@@ -102,6 +118,10 @@ WordPress から同梱 Mailpit に送信する設定手順です。
 
 ## 環境変数メモ
 - `STAGE` に応じて `www/wp-config.php` のデバッグ系定数が切り替わります（`production` で無効化されます）。
+- `DEPLOY_ENV=fargate` のとき、イメージ内設定は次の値に切り替わります。
+  - Web サーバー -> PHP-FPM の upstream: `127.0.0.1:9000`
+  - Nginx/Apache の access/error ログ: `STDOUT`/`STDERR`
+  - PHP-FPM の access/error ログ: `STDOUT`/`STDERR`
 - DB 認証情報と Salt は Compose 環境変数として注入されます。
 - WordPress コンテンツは `${WP_CONTENT_DIR-./www/content}` の bind mount で保持されます。
 - MySQL と Mailpit のデータは named volume（`dbdata`、`mailpitdata`）に保存されます。

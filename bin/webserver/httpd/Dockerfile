@@ -5,6 +5,8 @@ FROM dockerhubcolsis/distroless-builder-httpd:latest AS builder
 ARG WP_VERSION=latest
 # Container timezone (tz database name).
 ARG TIME_ZONE="Asia/Tokyo"
+# Build target environment (local|fargate).
+ARG DEPLOY_ENV=local
 
 # Update builder packages to keep base tooling patched.
 RUN set -eux; \
@@ -62,15 +64,24 @@ RUN set -eux; \
     cp /usr/share/zoneinfo/${TIME_ZONE:-ROC} /opt/etc/localtime; \
     find /opt -type f -executable -exec sh -c 'file -i "$1" | grep -q "x-executable; charset=binary"' _ '{}' ';'
 
+# Place Apache configuration in the staged filesystem and tune for fargate when requested.
+COPY ./config/httpd/httpd.conf /opt/usr/local/apache2/conf/httpd.conf
+COPY ./config/httpd/conf.d/ /opt/usr/local/apache2/conf/conf.d/
+
+RUN set -eux; \
+    if [ "${DEPLOY_ENV}" = "fargate" ]; then \
+      sed -i \
+        -e 's|ErrorLog /var/log/httpd/error.log|ErrorLog /proc/self/fd/2|g' \
+        -e 's|CustomLog /var/log/httpd/access.log combined|CustomLog /proc/self/fd/1 combined|g' \
+        /opt/usr/local/apache2/conf/httpd.conf; \
+      sed -i 's|proxy:fcgi://php:9000|proxy:fcgi://127.0.0.1:9000|g' /opt/usr/local/apache2/conf/conf.d/default.conf; \
+    fi
+
 # Distroless runtime image.
 FROM gcr.io/distroless/static-debian13
 
 # Copy prepared runtime filesystem from the builder stage.
 COPY --from=builder /opt /
-
-# Provide Apache configuration files from this repository.
-COPY ./config/httpd/httpd.conf /usr/local/apache2/conf/httpd.conf
-COPY ./config/httpd/conf.d/ /usr/local/apache2/conf/conf.d/
 
 # Expose HTTP port.
 EXPOSE 80

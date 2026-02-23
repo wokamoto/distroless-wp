@@ -5,6 +5,8 @@ FROM dockerhubcolsis/distroless-builder-php8.4:latest AS builder
 ARG WP_VERSION=latest
 # Container timezone (tz database name).
 ARG TIME_ZONE="Asia/Tokyo"
+# Build target environment (local|fargate).
+ARG DEPLOY_ENV=local
 
 # Update builder packages to keep base tooling patched.
 RUN set -eux; \
@@ -73,17 +75,24 @@ RUN set -eux; \
     cp /usr/share/zoneinfo/${TIME_ZONE:-ROC} /opt/etc/localtime; \
     find /opt -type f -executable -exec sh -c 'file -i "$1" | grep -q "x-executable; charset=binary"' _ '{}' ';'
 
+# Place PHP and PHP-FPM config in the staged filesystem and tune for fargate when requested.
+COPY ./config/php/php.ini /opt/usr/local/etc/php/php.ini
+COPY ./config/php/php-fpm.conf /opt/usr/local/etc/php-fpm.d/www.conf
+
+RUN set -eux; \
+    if [ "${DEPLOY_ENV}" = "fargate" ]; then \
+      sed -i \
+        -e 's|^error_log = .*|error_log = /proc/self/fd/2|g' \
+        -e 's|^access.log = .*|access.log = /proc/self/fd/1|g' \
+        -e 's|^php_admin_value\[error_log\] = .*|php_admin_value[error_log] = /proc/self/fd/2|g' \
+        /opt/usr/local/etc/php-fpm.d/www.conf; \
+    fi
+
 # Distroless runtime image.
 FROM gcr.io/distroless/static-debian13
 
 # Copy prepared runtime filesystem from the builder stage.
 COPY --from=builder /opt /
-
-# Apply project PHP configuration.
-COPY ./config/php/php.ini /usr/local/etc/php/php.ini
-
-# Apply project PHP-fpm configuration.
-COPY ./config/php/php-fpm.conf /usr/local/etc/php-fpm.d/www.conf
 
 # Default working directory for the php-fpm runtime.
 WORKDIR /var/www/html

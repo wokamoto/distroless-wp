@@ -5,6 +5,8 @@ FROM dockerhubcolsis/distroless-builder-wp-cli:latest AS builder
 ARG WP_VERSION=latest
 # Container timezone (tz database name).
 ARG TIME_ZONE="Asia/Tokyo"
+# Build target environment (local|fargate). Reserved for parity with other images.
+ARG DEPLOY_ENV=local
 
 # Build as root so filesystem prep can write system locations.
 USER root

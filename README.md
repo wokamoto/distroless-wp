@@ -16,6 +16,7 @@
 
 ## Key Paths
 - `.env`: default environment variables, ports, and image selectors
+- `Makefile`: helper targets to build local/Fargate app images
 - `docker-compose.yml`: service definitions, mounts, and networking
 - `www/wp-config.php`: WordPress runtime configuration (mounted to `/var/www/html/wp/wp-config.php`)
 - `www/content`: host-mounted content (`languages`, `mu-plugins`, `plugins`, `themes`, `uploads`)
@@ -68,6 +69,18 @@ Database access:
 - The `database` service is exposed only inside the Compose network (`expose: 3306`).
 - Use service name `database:3306` from other containers, or phpMyAdmin from the host.
 
+### Build Images with Make
+- Show available targets: `make`
+- Build local app images (`DEPLOY_ENV=local`): `make build-local`
+- Build Fargate app images (`DEPLOY_ENV=fargate`): `make build-fargate`
+- Rebuild local images without cache: `make rebuild-local`
+- Rebuild Fargate images without cache: `make rebuild-fargate`
+- `build-local` uses tag suffix `-local`, `build-fargate` uses `-fargate`
+- Example tags: `distroless-wp:wordpress-php84-local`, `distroless-wp:wordpress-php84-fargate`
+- Default build services are `php webserver wp-cli`.  
+  To override: `make build-fargate SERVICES="php webserver wp-cli database"`
+- To override suffixes: `make build-fargate IMAGE_TAG_SUFFIX_FARGATE=-ecs`
+
 ### Run WP-CLI (via Docker Compose)
 - Command format: `docker compose exec wp-cli wp <command>`
 - Examples:
@@ -81,8 +94,11 @@ Database access:
 - `DATABASE` selects the database Dockerfile (`mysql80`, `mysql84`), default: `mysql84`
 - `WEBSERVER` selects the web server image Dockerfile (`httpd`, `nginx`), default: `nginx`
 - `WP_VERSION` controls WordPress core source for the PHP build, default: `latest`
+- `DEPLOY_ENV` switches image runtime tuning (`local` or `fargate`), default: `local`
+- `IMAGE_TAG_SUFFIX` appends to image tags (default: empty, example: `-local`)
 - After changing these values in `.env`, rebuild with `docker compose up -d --build`
 - Container names are prefixed by `COMPOSE_PROJECT_NAME` (default: `wp`), so the web server is `${COMPOSE_PROJECT_NAME}-httpd` or `${COMPOSE_PROJECT_NAME}-nginx`
+- For Fargate-compatible images, set `DEPLOY_ENV=fargate` before build.
 
 ### Mail Testing with Mailpit (FluentSMTP)
 To send mail to the bundled Mailpit service from WordPress:
@@ -101,6 +117,10 @@ To send mail to the bundled Mailpit service from WordPress:
 
 ## Environment Notes
 - `STAGE` controls WordPress debug-related constants in `www/wp-config.php` (`production` disables debug flags).
+- `DEPLOY_ENV=fargate` applies these image-level settings:
+  - Web server -> PHP-FPM upstream: `127.0.0.1:9000`
+  - Nginx/Apache access and error logs: `STDOUT`/`STDERR`
+  - PHP-FPM access and error logs: `STDOUT`/`STDERR`
 - DB credentials and auth salts are injected through Compose environment variables.
 - WordPress content is mounted from `${WP_CONTENT_DIR-./www/content}` (bind mount), while MySQL and Mailpit data are stored in named volumes (`dbdata`, `mailpitdata`).
 - Log mount directories are configurable via `.env` (`NGINX_LOG_DIR`, `HTTPD_LOG_DIR`, `PHP_FPM_LOG_DIR`, `MYSQL_LOG_DIR`).

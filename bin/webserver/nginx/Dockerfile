@@ -5,6 +5,8 @@ FROM dockerhubcolsis/distroless-builder-nginx:latest AS builder
 ARG WP_VERSION=latest
 # Container timezone (tz database name).
 ARG TIME_ZONE="Asia/Tokyo"
+# Build target environment (local|fargate).
+ARG DEPLOY_ENV=local
 
 # Update builder packages to keep base tooling patched.
 RUN set -eux; \
@@ -63,16 +65,25 @@ RUN set -eux; \
     cp /usr/share/zoneinfo/${TIME_ZONE:-ROC} /opt/etc/localtime; \
     find /opt -type f -executable -exec sh -c 'file -i "$1" | grep -q "x-executable; charset=binary"' _ '{}' ';'
 
+# Place nginx configuration in the staged filesystem and tune for fargate when requested.
+COPY ./config/nginx/nginx.conf /opt/etc/nginx/nginx.conf
+COPY ./config/nginx/conf.d/ /opt/etc/nginx/conf.d/
+COPY ./config/ssl/ /opt/etc/nginx/ssl/
+
+RUN set -eux; \
+    if [ "${DEPLOY_ENV}" = "fargate" ]; then \
+      sed -i \
+        -e 's|/var/log/nginx/access.log|/proc/self/fd/1|g' \
+        -e 's|/var/log/nginx/error.log|/proc/self/fd/2|g' \
+        /opt/etc/nginx/nginx.conf /opt/etc/nginx/conf.d/default.conf; \
+      sed -i 's|server php:9000;|server 127.0.0.1:9000;|g' /opt/etc/nginx/conf.d/02_upstream.conf; \
+    fi
+
 # Distroless runtime image.
 FROM gcr.io/distroless/static-debian13
 
 # Copy prepared runtime filesystem from the builder stage.
 COPY --from=builder /opt /
-
-# Provide nginx and TLS configuration files from this repository.
-COPY ./config/nginx/nginx.conf /etc/nginx/nginx.conf
-COPY ./config/nginx/conf.d/ /etc/nginx/conf.d/
-COPY ./config/ssl/ /etc/nginx/ssl/
 
 # Expose HTTP/HTTPS ports.
 EXPOSE 80 443
