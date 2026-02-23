@@ -77,8 +77,8 @@
 - Fargate 向けをキャッシュなしで再ビルド: `make rebuild-fargate`
 - `build-local` はタグ接尾辞 `-local`、`build-fargate` は `-fargate` を使用します。
 - タグ例: `distroless-wp:wordpress-php84-local`、`distroless-wp:wordpress-php84-fargate`
-- 既定の対象サービスは `php webserver wp-cli` です。  
-  対象を上書きする場合: `make build-fargate SERVICES="php webserver wp-cli database"`
+- `build-*` は次のアプリイメージをビルドします: `php83`, `php84`, `php85`, `nginx`, `httpd`, `wp-cli`
+- 対象バリアントを絞る場合: `make build-fargate PHP_VERSIONS="php84" WEBSERVERS="nginx"`
 - 接尾辞を上書きする場合: `make build-fargate IMAGE_TAG_SUFFIX_FARGATE=-ecs`
 
 ### WP-CLI 実行手順（Docker Compose 経由）

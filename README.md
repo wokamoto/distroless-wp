@@ -77,8 +77,8 @@ Database access:
 - Rebuild Fargate images without cache: `make rebuild-fargate`
 - `build-local` uses tag suffix `-local`, `build-fargate` uses `-fargate`
 - Example tags: `distroless-wp:wordpress-php84-local`, `distroless-wp:wordpress-php84-fargate`
-- Default build services are `php webserver wp-cli`.  
-  To override: `make build-fargate SERVICES="php webserver wp-cli database"`
+- `build-*` targets build these app images: `php83`, `php84`, `php85`, `nginx`, `httpd`, `wp-cli`
+- To limit variants: `make build-fargate PHP_VERSIONS="php84" WEBSERVERS="nginx"`
 - To override suffixes: `make build-fargate IMAGE_TAG_SUFFIX_FARGATE=-ecs`
 
 ### Run WP-CLI (via Docker Compose)

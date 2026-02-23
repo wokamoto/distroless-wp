@@ -2,7 +2,8 @@ SHELL := /bin/sh
 
 COMPOSE ?= docker compose
 ENV_FILE ?= .env
-SERVICES ?= php webserver wp-cli
+PHP_VERSIONS ?= php83 php84 php85
+WEBSERVERS ?= nginx httpd
 IMAGE_TAG_SUFFIX_LOCAL ?= -local
 IMAGE_TAG_SUFFIX_FARGATE ?= -fargate
 
@@ -19,19 +20,48 @@ help:
 		'  make rebuild-fargate  Build fargate images without cache' \
 		'' \
 		'Optional variables:' \
-		'  SERVICES="php webserver wp-cli" (default)' \
+		'  PHP_VERSIONS="php83 php84 php85"' \
+		'  WEBSERVERS="nginx httpd"' \
 		'  ENV_FILE=.env' \
 		'  IMAGE_TAG_SUFFIX_LOCAL=-local' \
 		'  IMAGE_TAG_SUFFIX_FARGATE=-fargate'
 
 build-local:
-	DEPLOY_ENV=local IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_LOCAL) $(COMPOSE) --env-file $(ENV_FILE) build $(SERVICES)
+	@set -eu; \
+	for phpv in $(PHP_VERSIONS); do \
+		DEPLOY_ENV=local IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_LOCAL) PHPVERSION=$${phpv} $(COMPOSE) --env-file $(ENV_FILE) build php; \
+	done; \
+	for ws in $(WEBSERVERS); do \
+		DEPLOY_ENV=local IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_LOCAL) WEBSERVER=$${ws} $(COMPOSE) --env-file $(ENV_FILE) build webserver; \
+	done; \
+	DEPLOY_ENV=local IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_LOCAL) $(COMPOSE) --env-file $(ENV_FILE) build wp-cli
 
 build-fargate:
-	DEPLOY_ENV=fargate IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_FARGATE) $(COMPOSE) --env-file $(ENV_FILE) build $(SERVICES)
+	@set -eu; \
+	for phpv in $(PHP_VERSIONS); do \
+		DEPLOY_ENV=fargate IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_FARGATE) PHPVERSION=$${phpv} $(COMPOSE) --env-file $(ENV_FILE) build php; \
+	done; \
+	for ws in $(WEBSERVERS); do \
+		DEPLOY_ENV=fargate IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_FARGATE) WEBSERVER=$${ws} $(COMPOSE) --env-file $(ENV_FILE) build webserver; \
+	done; \
+	DEPLOY_ENV=fargate IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_FARGATE) $(COMPOSE) --env-file $(ENV_FILE) build wp-cli
 
 rebuild-local:
-	DEPLOY_ENV=local IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_LOCAL) $(COMPOSE) --env-file $(ENV_FILE) build --no-cache $(SERVICES)
+	@set -eu; \
+	for phpv in $(PHP_VERSIONS); do \
+		DEPLOY_ENV=local IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_LOCAL) PHPVERSION=$${phpv} $(COMPOSE) --env-file $(ENV_FILE) build --no-cache php; \
+	done; \
+	for ws in $(WEBSERVERS); do \
+		DEPLOY_ENV=local IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_LOCAL) WEBSERVER=$${ws} $(COMPOSE) --env-file $(ENV_FILE) build --no-cache webserver; \
+	done; \
+	DEPLOY_ENV=local IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_LOCAL) $(COMPOSE) --env-file $(ENV_FILE) build --no-cache wp-cli
 
 rebuild-fargate:
-	DEPLOY_ENV=fargate IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_FARGATE) $(COMPOSE) --env-file $(ENV_FILE) build --no-cache $(SERVICES)
+	@set -eu; \
+	for phpv in $(PHP_VERSIONS); do \
+		DEPLOY_ENV=fargate IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_FARGATE) PHPVERSION=$${phpv} $(COMPOSE) --env-file $(ENV_FILE) build --no-cache php; \
+	done; \
+	for ws in $(WEBSERVERS); do \
+		DEPLOY_ENV=fargate IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_FARGATE) WEBSERVER=$${ws} $(COMPOSE) --env-file $(ENV_FILE) build --no-cache webserver; \
+	done; \
+	DEPLOY_ENV=fargate IMAGE_TAG_SUFFIX=$(IMAGE_TAG_SUFFIX_FARGATE) $(COMPOSE) --env-file $(ENV_FILE) build --no-cache wp-cli
