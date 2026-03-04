@@ -1,6 +1,10 @@
 set $proxy_https '';
+set $proxy_x_forwarded_proto $scheme;
 if ( $http_x_forwarded_proto = 'https' ) {
     set $proxy_https 'on';
+}
+if ( $http_x_forwarded_proto != '' ) {
+    set $proxy_x_forwarded_proto $http_x_forwarded_proto;
 }
 if ( $http_x_forwarded_port = '443' ) {
     set $proxy_https 'on';
@@ -14,7 +18,7 @@ if ( $scheme = 'https' ) {
 
 include fastcgi_params;
 fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-fastcgi_param HTTP_X_FORWARDED_PROTO $scheme;
+fastcgi_param HTTP_X_FORWARDED_PROTO $proxy_x_forwarded_proto;
 fastcgi_param HTTPS $proxy_https if_not_empty;
 fastcgi_pass wordpress_fpm;
 fastcgi_intercept_errors on;
