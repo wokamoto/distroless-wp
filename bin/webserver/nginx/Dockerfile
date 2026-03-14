@@ -34,9 +34,11 @@ RUN set -eux; \
       rsync -am --exclude '*.php' --delete /tmp/wordpress/ /var/www/html/wp/; \
       rm -rf /tmp/wordpress /tmp/wordpress.tar.gz; \
     fi; \
+    rm -rf /var/www/html/wp/wp-content; \
     printf "%s\n" "<?php // Silence is golden." > /var/www/html/index.php; \
     printf "%s\n" "<?php // Silence is golden." > /var/www/html/wp/wp-admin/index.php; \
     printf "%s\n" "<?php // Silence is golden." > /var/www/html/assets/index.php
+COPY ./www/content/mu-plugins/ /var/www/html/assets/mu-plugins/
 
 # Stage only the runtime filesystem we need for the final distroless image.
 RUN set -eux; \
