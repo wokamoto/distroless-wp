@@ -34,9 +34,11 @@ RUN set -eux; \
       rsync -am --exclude '*.php' --delete /tmp/wordpress/ /var/www/html/wp/; \
       rm -rf /tmp/wordpress /tmp/wordpress.tar.gz; \
     fi; \
+    rm -rf /var/www/html/wp/wp-content; \
     printf "%s\n" "<?php // Silence is golden." > /var/www/html/index.php; \
     printf "%s\n" "<?php // Silence is golden." > /var/www/html/wp/wp-admin/index.php; \
     printf "%s\n" "<?php // Silence is golden." > /var/www/html/assets/index.php
+COPY ./www/content/mu-plugins/ /var/www/html/assets/mu-plugins/
 
 # Stage only the runtime filesystem we need for the final distroless image.
 RUN set -eux; \
@@ -71,8 +73,8 @@ COPY ./config/httpd/conf.d/ /opt/usr/local/apache2/conf/conf.d/
 RUN set -eux; \
     if [ "${DEPLOY_ENV}" = "fargate" ]; then \
       sed -i \
+        -e 's|CustomLog /var/log/httpd/access.log|CustomLog /dev/stdout|g' \
         -e 's|ErrorLog /var/log/httpd/error.log|ErrorLog /dev/stderr|g' \
-        -e 's|CustomLog /var/log/httpd/access.log combined|CustomLog /dev/stdout combined|g' \
         /opt/usr/local/apache2/conf/httpd.conf; \
       sed -i 's|proxy:fcgi://php:9000|proxy:fcgi://127.0.0.1:9000|g' /opt/usr/local/apache2/conf/conf.d/default.conf; \
     fi

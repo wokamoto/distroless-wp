@@ -85,49 +85,55 @@ $table_prefix = 'wp_';
  *
  * @link https://developer.wordpress.org/advanced-administration/debug/debug-wordpress/
  */
-$stage = getenv( 'STAGE' );
+$stage               = getenv( 'STAGE' );
 $is_production_stage = is_string( $stage ) && 'production' === strtolower( trim( $stage ) );
+$development_mode    = getenv( 'DEVELOPMENT_MODE' ) ? getenv( 'DEVELOPMENT_MODE' ) : 'theme';
 
 define( 'WP_DEBUG', ! $is_production_stage );
+define( 'WP_DEBUG_DISPLAY', false );
 define( 'WP_DEBUG_LOG', ! $is_production_stage );
 define( 'SCRIPT_DEBUG', ! $is_production_stage );
 define( 'WP_ENVIRONMENT_TYPE', $stage );
-define( 'WP_DEVELOPMENT_MODE', ! $is_production_stage ? 'theme' : '' );
+define( 'WP_DEVELOPMENT_MODE', ! $is_production_stage ? $development_mode : '' );
 
 /* Add any custom values between this line and the "stop editing" line. */
-if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strpos($_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false) {
+$scheme = ( ! empty( $_SERVER['HTTPS'] ) && 'off' !== $_SERVER['HTTPS'] ) ? 'https' : 'http';
+if ( getenv('SCHEME') ) {
+	$scheme = getenv('SCHEME');
+} else if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strpos($_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false) {
+	$scheme = 'https';
+}
+if ( $scheme === 'https' ) {
 	$_SERVER['HTTPS'] = 'on';
 }
-$server_name = $_SERVER['SERVER_NAME'] ?? 'localhost';
-$scheme = ( ! empty( $_SERVER['HTTPS'] ) && 'off' !== $_SERVER['HTTPS'] ) ? 'https' : 'http';
-$server_port = isset( $_SERVER['SERVER_PORT'] ) ? (string) $_SERVER['SERVER_PORT'] : '';
 
-$is_default_port =
-	( 'http' === $scheme && '80' === $server_port ) ||
-	( 'https' === $scheme && '443' === $server_port );
+$server_name = $_SERVER['SERVER_NAME'] ?? 'localhost';
+$server_port = isset( $_SERVER['SERVER_PORT'] ) ? (string) $_SERVER['SERVER_PORT'] : '';
+$is_default_port = '80' === $server_port || '443' === $server_port;
 $host = $server_name;
 if ( '' !== $server_port && ! $is_default_port ) {
 	$host .= ':' . $server_port;
-}
-
-if ( isset($_SERVER['HTTP_X_FORWARDED_PROTO']) ) {
-	$scheme = $_SERVER['HTTP_X_FORWARDED_PROTO'];
 }
 if ( isset($_SERVER['HTTP_HOST']) ) {
 	$host = $_SERVER['HTTP_HOST'];
 }
 
-define( 'WP_HOME', $scheme . '://' . $host );
-define( 'WP_SITEURL', WP_HOME . '/wp' );
+//define( 'WP_HOME', $scheme . '://' . $host );
+//define( 'WP_SITEURL', WP_HOME . '/wp' );
 
+define( 'WP_CONTENT_URL', $scheme . '://' . $host . '/assets' );
 define( 'WP_CONTENT_DIR', dirname( __DIR__ ) . '/assets' );
-define( 'WP_CONTENT_URL', WP_HOME . '/assets' );
-define( 'WP_PLUGIN_DIR', WP_CONTENT_DIR . '/plugins' );
-define( 'WPMU_PLUGIN_DIR', WP_CONTENT_DIR . '/mu-plugins' );
 define( 'WP_PLUGIN_URL', WP_CONTENT_URL . '/plugins' );
+define( 'WP_PLUGIN_DIR', WP_CONTENT_DIR . '/plugins' );
+define( 'PLUGINDIR', WP_PLUGIN_DIR );
 define( 'WPMU_PLUGIN_URL', WP_CONTENT_URL . '/mu-plugins' );
-define( 'PLUGINDIR', WP_CONTENT_URL . '/plugins' );
+define( 'WPMU_PLUGIN_DIR', WP_CONTENT_DIR . '/mu-plugins' );
+define( 'MUPLUGINDIR', WPMU_PLUGIN_DIR );
+define( 'WP_LANG_DIR', WP_CONTENT_DIR . '/languages/wordpress' );
 
+define( 'CONCATENATE_SCRIPTS', false );
+define( 'COMPRESS_SCRIPTS', false );
+define( 'COMPRESS_CSS', false );
 
 /* That's all, stop editing! Happy publishing. */
 

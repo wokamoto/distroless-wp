@@ -37,7 +37,9 @@ RUN set -eux; \
       tar -xzf /tmp/wordpress.tar.gz -C /tmp; \
       cp -a /tmp/wordpress/. /var/www/html/wp/; \
       rm -rf /tmp/wordpress /tmp/wordpress.tar.gz; \
-    fi
+    fi; \
+    rm -rf /var/www/html/wp/wp-content
+COPY ./www/content/mu-plugins/ /var/www/html/assets/mu-plugins/
 
 # Set runtime PHP defaults used by wp-cli in the container.
 RUN set -eux; \

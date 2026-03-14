@@ -25,7 +25,9 @@ RUN set -eux; \
       /var/www/html/assets/mu-plugins \
       /var/www/html/assets/plugins \
       /var/www/html/assets/themes \
-      /var/www/html/assets/uploads && \
+      /var/www/html/assets/uploads \
+      /var/www/html/assets/cache \
+      /var/www/html/assets/upgrade && \
     if [ "${WP_VERSION}" = "latest" ]; then \
       cp -a /usr/src/wordpress/. /var/www/html/wp/; \
     else \
@@ -34,9 +36,11 @@ RUN set -eux; \
       cp -a /tmp/wordpress/. /var/www/html/wp/; \
       rm -rf /tmp/wordpress /tmp/wordpress.tar.gz; \
     fi; \
+    rm -rf /var/www/html/wp/wp-content; \
     printf "%s\n" "<?php" "define( 'WP_USE_THEMES', true );" "require __DIR__ . '/wp/wp-blog-header.php';" > /var/www/html/index.php; \
     printf "%s\n" "<?php // Silence is golden." > /var/www/html/assets/index.php; \
     chown -R www-data:www-data /var/www/html
+COPY ./www/content/mu-plugins/ /var/www/html/assets/mu-plugins/
 
 # Provide runtime wp-config.php from this repository.
 COPY ./www/wp-config.php /var/www/html/wp/
@@ -82,8 +86,8 @@ COPY ./config/php/php-fpm.conf /opt/usr/local/etc/php-fpm.d/www.conf
 RUN set -eux; \
     if [ "${DEPLOY_ENV}" = "fargate" ]; then \
       sed -i \
-        -e 's|^error_log = .*|error_log = /dev/stderr|g' \
         -e 's|^access.log = .*|access.log = /dev/stdout|g' \
+        -e 's|^error_log = .*|error_log = /dev/stderr|g' \
         -e 's|^php_admin_value\[error_log\] = .*|php_admin_value[error_log] = /dev/stderr|g' \
         /opt/usr/local/etc/php-fpm.d/www.conf; \
     fi

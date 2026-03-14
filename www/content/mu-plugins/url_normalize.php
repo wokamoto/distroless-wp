@@ -4,8 +4,8 @@ Plugin Name: URL Normalize
 Plugin URI: 
 Description: 
 Version: 0.0.1
-Author: 
-Author URI: 
+Author: COLSIS,Inc.
+Author URI: https://colsis.jp
 License: GPLv2 or later
 */
 if (!defined('ABSPATH')) {
