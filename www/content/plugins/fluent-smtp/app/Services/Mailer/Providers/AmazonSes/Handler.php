@@ -23,12 +23,16 @@ class Handler extends BaseHandler
             return $this->postSend();
         }
 
-        return $this->handleResponse(new \WP_Error(422, __('Something went wrong!', 'fluent-smtp'), []));
+        return $this->handleResponse(new \WP_Error(422, __('Something went wrong.', 'fluent-smtp'), []));
     }
 
     public function postSend()
     {
-        $mime = chunk_split(base64_encode($this->phpMailer->getSentMIMEMessage()), 76, "\n");
+        $rawMessage = $this->normalizeListHeaders(
+            $this->phpMailer->getSentMIMEMessage()
+        );
+
+        $mime = chunk_split(base64_encode($rawMessage), 76, "\n");
 
         $connectionSettings = $this->filterConnectionVars($this->getSetting());
 
@@ -101,26 +105,16 @@ class Handler extends BaseHandler
         $attachments = [];
 
         foreach ($this->getParam('attachments') as $attachment) {
-            $file = false;
-
             try {
-                if (is_file($attachment[0]) && is_readable($attachment[0])) {
-                    $fileName = basename($attachment[0]);
-                    $file = file_get_contents($attachment[0]);
-                    $mimeType = mime_content_type($attachment[0]);
-                    $filetype = str_replace(';', '', trim($mimeType));
-                }
+                $file = self::attachmentContent($attachment);
             } catch (\Exception $e) {
-                $file = false;
-            }
-
-            if ($file === false) {
+                $this->logAttachmentFailure('AmazonSes', $e);
                 continue;
             }
 
             $attachments[] = [
-                'type'    => $filetype,
-                'name'    => $fileName,
+                'type'    => self::attachmentType($attachment),
+                'name'    => self::attachmentName($attachment),
                 'content' => $file
             ];
         }
@@ -142,11 +136,6 @@ class Handler extends BaseHandler
         return $headers;
     }
 
-    protected function getRegion()
-    {
-        return 'email.' . $this->getSetting('region') . '.amazonaws.com';
-    }
-
     public function getValidSenders($config)
     {
         $config = $this->filterConnectionVars($config);
@@ -159,7 +148,7 @@ class Handler extends BaseHandler
     public function getValidSendingIdentities($config)
     {
         $config = $this->filterConnectionVars($config);
-        $region = 'email.' . $config['region'] . '.amazonaws.com';
+        $region = SimpleEmailService::regionToHost($config['region']);
 
         $ses = new SimpleEmailService(
             $config['access_key'],
@@ -174,7 +163,8 @@ class Handler extends BaseHandler
         if (is_wp_error($validSenders)) {
             return [
                 'emails'          => [$config['sender_email']],
-                'verified_domain' => ''
+                'verified_domain' => '',
+                'lookup_failed'   => true
             ];
         }
 
@@ -188,14 +178,17 @@ class Handler extends BaseHandler
 
         if (apply_filters('fluent_mail_ses_primary_domain_only', true)) {
             $addresses = array_filter($addresses, function ($email) use ($domainName) {
-                return !!strpos($email, $domainName);
+                return !!stripos($email, $domainName);
             });
             $addresses = array_values($addresses);
         }
 
+        // SES identities are case-insensitive, and are listed as they were created.
+        $verifiedDomains = array_map('strtolower', (array)Arr::get($validSenders, 'domains', []));
+
         return [
             'emails'          => apply_filters('fluentsmtp_ses_valid_senders', $addresses, $config),
-            'verified_domain' => in_array($domainName, $validSenders['domains']) ? $domainName : ''
+            'verified_domain' => in_array(strtolower($domainName), $verifiedDomains, true) ? $domainName : ''
         ];
     }
 
@@ -235,17 +228,14 @@ class Handler extends BaseHandler
         $connection = $this->filterConnectionVars($connection);
         $validSenders = $this->getValidSendingIdentities($connection);
 
-        $emailDomain = explode('@', $email);
-        $emailDomain = $emailDomain[1];
-
-        if ($emailDomain != $validSenders['verified_domain']) {
-            return new \WP_Error(422, __('Invalid email address! Please use a verified domain.', 'fluent-smtp'));
+        if (!$this->isOnVerifiedDomain($email, $validSenders['verified_domain'])) {
+            return new \WP_Error(422, __('Use an email address on a domain you have verified.', 'fluent-smtp'));
         }
 
         $settings = fluentMailGetSettings();
         $mappings = Arr::get($settings, 'mappings', []);
 
-        if (isset($mappings[$email])) {
+        if (Settings::findMappingKey($mappings, $email)) {
             return new \WP_Error(422, __('Email address already exists with another connection. Please choose a different email.', 'fluent-smtp'));
         }
 
@@ -263,27 +253,24 @@ class Handler extends BaseHandler
         $connection = $this->filterConnectionVars($connection);
         $validSenders = $this->getValidSendingIdentities($connection);
 
-        $emailDomain = explode('@', $email);
-        $emailDomain = $emailDomain[1];
-
-        if ($emailDomain != $validSenders['verified_domain']) {
-            return new \WP_Error(422, __('Invalid email address! Please use a verified domain.', 'fluent-smtp'));
+        if (!$this->isOnVerifiedDomain($email, $validSenders['verified_domain'])) {
+            return new \WP_Error(422, __('Use an email address on a domain you have verified.', 'fluent-smtp'));
         }
 
         if (in_array($email, $validSenders['emails'])) {
-            return new \WP_Error(422, __('Sorry! you can not remove this email from this connection', 'fluent-smtp'));
+            return new \WP_Error(422, __('This email address cannot be removed from this connection.', 'fluent-smtp'));
         }
 
         $settings = fluentMailGetSettings();
         $mappings = Arr::get($settings, 'mappings', []);
 
         if (!isset($mappings[$email])) {
-            return new \WP_Error(422, __('Email does not exists. Please try again.', 'fluent-smtp'));
+            return new \WP_Error(422, __('That email address does not exist. Please try again.', 'fluent-smtp'));
         }
 
         // check if the it's the same email or not
         if ($mappings[$email] != md5($connection['sender_email'])) {
-            return new \WP_Error(422, __('Email does not exists. Please try again.', 'fluent-smtp'));
+            return new \WP_Error(422, __('That email address does not exist. Please try again.', 'fluent-smtp'));
         }
 
         $settings = get_option('fluentmail-settings');
@@ -296,9 +283,16 @@ class Handler extends BaseHandler
     }
 
 
+    private function isOnVerifiedDomain($email, $verifiedDomain)
+    {
+        $emailDomain = substr((string)strrchr($email, '@'), 1);
+
+        return $verifiedDomain && $emailDomain && strcasecmp($emailDomain, $verifiedDomain) === 0;
+    }
+
     private function getStats($config)
     {
-        $region = 'email.' . $config['region'] . '.amazonaws.com';
+        $region = SimpleEmailService::regionToHost($config['region']);
 
         $ses = new SimpleEmailService(
             $config['access_key'],
@@ -324,7 +318,15 @@ class Handler extends BaseHandler
     {
         $validSenders = $this->getValidSendingIdentities($connection);
         $verifiedDomain = Arr::get($validSenders, 'verified_domain', '');
-        if ($verifiedDomain) {
+
+        /*
+         * Saving the connection replaces its mappings with this list, so the
+         * additional senders have to be in it. They were checked against a
+         * verified domain when they were added; a failed identity lookup is no
+         * evidence that they stopped being valid, and dropping them here would
+         * quietly send their mail from the primary address after the next save.
+         */
+        if ($verifiedDomain || Arr::get($validSenders, 'lookup_failed')) {
             $settings = fluentMailGetSettings();
             $mappings = Arr::get($settings, 'mappings', []);
 

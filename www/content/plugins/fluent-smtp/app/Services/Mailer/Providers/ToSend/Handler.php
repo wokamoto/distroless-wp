@@ -3,6 +3,7 @@
 namespace FluentMail\App\Services\Mailer\Providers\ToSend;
 
 use FluentMail\Includes\Support\Arr;
+use FluentMail\App\Models\Settings;
 use FluentMail\App\Services\Mailer\BaseHandler;
 
 class Handler extends BaseHandler
@@ -13,13 +14,15 @@ class Handler extends BaseHandler
 
     protected $baseUrl = 'https://api.tosend.com/v2/';
 
+    private static $curlHandle = null;
+
     public function send()
     {
         if ($this->preSend() && $this->phpMailer->preSend()) {
             return $this->postSend();
         }
 
-        return $this->handleResponse(new \WP_Error(422, __('Something went wrong!', 'fluent-smtp'), []));
+        return $this->handleResponse(new \WP_Error(422, __('Something went wrong.', 'fluent-smtp'), []));
     }
 
     public function postSend()
@@ -59,32 +62,34 @@ class Handler extends BaseHandler
             $body['attachments'] = $this->getAttachments();
         }
 
-        // Add any custom headers
+        /*
+         * toSend documents `headers` as an object map of name to value, so the
+         * names are assigned as keys rather than appended. Appending produced a
+         * JSON array of single-key objects, which the API accepted with a 200
+         * and a message_id while dropping every header — taking
+         * List-Unsubscribe with it on bulk sends. A map cannot express a
+         * repeated header name, so the last occurrence wins; this matches the
+         * Cloudflare handler, which builds the same shape.
+         */
         $customHeaders = $this->phpMailer->getCustomHeaders();
         if (!empty($customHeaders)) {
+            $headers = [];
             foreach ($customHeaders as $header) {
-                $body['headers'][] = [
-                    $header[0] => $header[1]
-                ];
+                $headers[$header[0]] = $header[1];
+            }
+            if (!empty($headers)) {
+                $body['headers'] = $headers;
             }
         }
 
-        $args = array(
-            'headers'   => $this->getRequestHeaders(),
-            'body'      => json_encode($body),
-            'sslverify' => false
-        );
-
-        $response = wp_remote_post($this->baseUrl . 'emails', $args);
+        $response = $this->sendViaCurl($this->baseUrl . 'emails', json_encode($body));
 
         if (is_wp_error($response)) {
             $returnResponse = new \WP_Error($response->get_error_code(), $response->get_error_message(), $response->get_error_messages());
         } else {
-            $responseBody = wp_remote_retrieve_body($response);
-
-            $responseCode = wp_remote_retrieve_response_code($response);
+            $responseCode = (int)$response['code'];
             $isOKCode = $responseCode == $this->emailSentCode;
-            $responseBody = \json_decode($responseBody, true);
+            $responseBody = \json_decode($response['body'], true);
             $messageId = Arr::get($responseBody, 'message_id');
 
             if ($isOKCode && $messageId) {
@@ -92,7 +97,7 @@ class Handler extends BaseHandler
                     'id' => $messageId
                 ];
             } else {
-                $returnResponse = new \WP_Error($responseCode, Arr::get($responseBody, 'message', 'Unknown Error'), $responseBody);
+                $returnResponse = new \WP_Error($responseCode, Arr::get($responseBody, 'message', __('Unknown Error', 'fluent-smtp')), $responseBody);
             }
         }
 
@@ -104,7 +109,7 @@ class Handler extends BaseHandler
     public function getFrom()
     {
         $fromEmail = $this->phpMailer->From;
-        if ($this->isForcedEmail() && !fluentMailIsListedSenderEmail($fromEmail)) {
+        if ($this->isForcedEmail() && !$this->isOwnSender($fromEmail)) {
             $fromEmail = $this->getSetting('sender_email');
         }
 
@@ -142,14 +147,12 @@ class Handler extends BaseHandler
                 return null;
             }
 
-            $name = Arr::get($replyTo, 'name', '');
-
-            if ($name) {
-                return $name . ' <' . $replyTo['email'] . '>';
-            }
-
-            return $replyTo['email'];
+            return array_filter([
+                'name'  => Arr::get($replyTo, 'name', ''),
+                'email' => $replyTo['email']
+            ]);
         }
+
         return '';
     }
 
@@ -195,31 +198,17 @@ class Handler extends BaseHandler
         $attachments = [];
 
         foreach ($this->getParam('attachments') as $attachment) {
-            $file = false;
-
             try {
-                if (is_file($attachment[0]) && is_readable($attachment[0])) {
-                    $fileName = basename($attachment[0]);
-                    $file = file_get_contents($attachment[0]);
-                    $mimeType = mime_content_type($attachment[0]);
-                    $filetype = str_replace(';', '', trim($mimeType));
-                }
+                $file = self::attachmentContent($attachment);
             } catch (\Exception $e) {
-                $file = false;
-            }
-
-            if ($file === false) {
+                $this->logAttachmentFailure('ToSend', $e);
                 continue;
             }
 
-            $chunkSize = 76;
-            $file = base64_encode($file);
-            $file = trim(chunk_split($file, $chunkSize, "\n"));
-
             $attachments[] = [
-                'type'    => $filetype,
-                'name'    => $fileName,
-                'content' => $file
+                'type'    => self::attachmentType($attachment),
+                'name'    => self::attachmentName($attachment),
+                'content' => trim(chunk_split(base64_encode($file), 76, "\n"))
             ];
         }
 
@@ -231,6 +220,79 @@ class Handler extends BaseHandler
         return [
             'Accept'       => 'application/json',
             'Content-Type' => 'application/json'
+        ];
+    }
+
+    protected function sendViaCurl($url, $jsonBody)
+    {
+        if (!function_exists('curl_init')) {
+            $response = wp_remote_post($url, [
+                'headers'   => $this->getRequestHeaders(),
+                'body'      => $jsonBody,
+                'sslverify' => true,
+                'timeout'   => 30,
+            ]);
+
+            if (is_wp_error($response)) {
+                return $response;
+            }
+
+            return [
+                'code' => wp_remote_retrieve_response_code($response),
+                'body' => wp_remote_retrieve_body($response),
+            ];
+        }
+
+        if (self::$curlHandle === null) {
+            self::$curlHandle = curl_init();
+            curl_setopt(self::$curlHandle, CURLOPT_POST, true);
+            curl_setopt(self::$curlHandle, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt(self::$curlHandle, CURLOPT_FOLLOWLOCATION, false);
+            curl_setopt(self::$curlHandle, CURLOPT_SSL_VERIFYPEER, true);
+            curl_setopt(self::$curlHandle, CURLOPT_SSL_VERIFYHOST, 2);
+
+            /*
+             * This transport bypasses WP_Http, so it does not pick up the CA
+             * bundle WordPress ships. Point cURL at that bundle when it is
+             * readable — a stale system trust store is the usual reason peer
+             * verification gets turned off, and the message body and API key
+             * travel over this connection. Falls back to the system store
+             * rather than to no verification at all.
+             */
+            $caBundle = ABSPATH . WPINC . '/certificates/ca-bundle.crt';
+            if (is_readable($caBundle)) {
+                curl_setopt(self::$curlHandle, CURLOPT_CAINFO, $caBundle);
+            }
+
+            curl_setopt(self::$curlHandle, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+            curl_setopt(self::$curlHandle, CURLOPT_CONNECTTIMEOUT, 10);
+            curl_setopt(self::$curlHandle, CURLOPT_TIMEOUT, 30);
+            curl_setopt(self::$curlHandle, CURLOPT_HTTPHEADER, [
+                'Accept: application/json',
+                'Content-Type: application/json',
+                'Connection: keep-alive',
+            ]);
+        }
+
+        curl_setopt(self::$curlHandle, CURLOPT_URL, $url);
+        curl_setopt(self::$curlHandle, CURLOPT_POSTFIELDS, $jsonBody);
+
+        $body = curl_exec(self::$curlHandle);
+
+        if ($body === false) {
+            $errno = curl_errno(self::$curlHandle);
+            $error = curl_error(self::$curlHandle);
+
+            // Dropping the only reference frees the handle (curl_close() is
+            // deprecated in PHP 8.5).
+            self::$curlHandle = null;
+
+            return new \WP_Error('curl_' . $errno, $error ?: __('cURL request failed', 'fluent-smtp'), [$error]);
+        }
+
+        return [
+            'code' => curl_getinfo(self::$curlHandle, CURLINFO_RESPONSE_CODE),
+            'body' => $body,
         ];
     }
 
@@ -279,20 +341,43 @@ class Handler extends BaseHandler
             'error'      => $error
         ]);
 
-        $hasMultiDomain = $stats['verified_domains'] ? count($validSenders['verified_senders']) > 1 : false;
+        /*
+         * Whether the manager may take a sender on a domain other than the primary
+         * one, which is decided by the account and not by how many senders are already
+         * mapped. This counted `verified_senders` - a list that holds the connection's
+         * own From address and nothing else - so it was false on every toSend account,
+         * and the dialog refused addresses that addNewSenderEmail() would have accepted:
+         * that check reads `verified_domains`, so this reads the same thing.
+         */
+        $verifiedDomains = (array) Arr::get($stats, 'verified_domains', []);
+        $hasMultiDomain = count($verifiedDomains) > 1;
 
         return [
             'info'                 => $info,
             'verificationSettings' => [
-                'connection_name'       => 'ToSend',
+                'connection_name'       => 'toSend',
                 'all_senders'           => $validSenders['all_senders'],
                 'verified_senders'      => $validSenders['verified_senders'],
                 'verified_domain'       => $validSenders['verified_domain'],
                 'supports_multi_domain' => $hasMultiDomain,
-                'api_info'   => $stats,
-                'email_help_message'    => $hasMultiDomain ? __('Make sure to verify your sender emails or domain in toSend dashboard and available in the provided API Key.', 'fluent-smtp') : ''
+                'api_info'              => $stats,
+                'email_help_message'    => $hasMultiDomain ? __('Verify this sender address, or its domain, in your toSend dashboard, and make sure the API key can send from it.', 'fluent-smtp') : ''
             ]
         ];
+    }
+
+    public function getValidSenders($connection)
+    {
+        $senders = [$connection['sender_email']];
+
+        $additional = array_filter((array) Arr::get($connection, 'additional_senders', []));
+        foreach ($additional as $extra) {
+            if (is_email($extra)) {
+                $senders[] = $extra;
+            }
+        }
+
+        return array_values(array_unique(array_filter($senders)));
     }
 
     public function addNewSenderEmail($connection, $email)
@@ -303,24 +388,24 @@ class Handler extends BaseHandler
         if (is_wp_error($stats)) {
             return new \WP_Error(422, __('Unable to verify the connection details. Please check the API Key.', 'fluent-smtp'));
         }
-        $verifiedDomains = Arr::get($stats, 'verified_domains', []);
-        $emailDomain = explode('@', $email);
-        $emailDomain = $emailDomain[1];
+        $verifiedDomains = array_map('strtolower', (array) Arr::get($stats, 'verified_domains', []));
+        $emailDomain = substr((string) strrchr($email, '@'), 1);
 
-        if (!in_array($emailDomain, $verifiedDomains)) {
-            return new \WP_Error(422, __('Invalid email address! Please use an email with verified domain.', 'fluent-smtp'));
+        if (!$emailDomain || !in_array(strtolower($emailDomain), $verifiedDomains, true)) {
+            return new \WP_Error(422, __('Use an email address on a domain you have verified.', 'fluent-smtp'));
         }
 
         $settings = fluentMailGetSettings();
         $mappings = Arr::get($settings, 'mappings', []);
 
-        if (isset($mappings[$email])) {
+        if (Settings::findMappingKey($mappings, $email)) {
             return new \WP_Error(422, __('Email address already exists with another connection. Please choose a different email.', 'fluent-smtp'));
         }
 
         $settings = get_option('fluentmail-settings');
 
         $settings['mappings'][$email] = md5($connection['sender_email']);
+        $settings = $this->writeAdditionalSenders($settings, $connection, $email, true);
 
         update_option('fluentmail-settings', $settings);
 
@@ -335,7 +420,7 @@ class Handler extends BaseHandler
         $mappings = Arr::get($settings, 'mappings', []);
 
         if (!isset($mappings[$email])) {
-            return new \WP_Error(422, __('Email does not exists. Please try again.', 'fluent-smtp'));
+            return new \WP_Error(422, __('That email address does not exist. Please try again.', 'fluent-smtp'));
         }
 
         if ($email == $connection['sender_email']) {
@@ -344,16 +429,49 @@ class Handler extends BaseHandler
 
         // check if the it's the same email or not
         if ($mappings[$email] != md5($connection['sender_email'])) {
-            return new \WP_Error(422, __('Email does not exists. Please try again.', 'fluent-smtp'));
+            return new \WP_Error(422, __('That email address does not exist. Please try again.', 'fluent-smtp'));
         }
 
         $settings = get_option('fluentmail-settings');
 
         unset($settings['mappings'][$email]);
+        $settings = $this->writeAdditionalSenders($settings, $connection, $email, false);
 
         update_option('fluentmail-settings', $settings);
 
         return true;
+    }
+
+    /*
+     * A sender added here has to land in the connection's own `additional_senders` as
+     * well as in the global mappings, because those two are not equal partners: saving
+     * the connection clears every mapping that points at it and rebuilds the list from
+     * getValidSenders(), which reads `additional_senders`. A sender written only to the
+     * mappings would send correctly right up until the next time anyone opened the
+     * connection and pressed Save, and then quietly stop.
+     */
+    private function writeAdditionalSenders($settings, $connection, $email, $add)
+    {
+        $key = md5($connection['sender_email']);
+
+        if (!isset($settings['connections'][$key]['provider_settings'])) {
+            return $settings;
+        }
+
+        $current = Arr::get($settings['connections'][$key]['provider_settings'], 'additional_senders', []);
+        $current = array_values(array_filter((array) $current));
+
+        if ($add) {
+            $current[] = $email;
+        } else {
+            $current = array_filter($current, function ($existing) use ($email) {
+                return $existing != $email;
+            });
+        }
+
+        $settings['connections'][$key]['provider_settings']['additional_senders'] = array_values(array_unique($current));
+
+        return $settings;
     }
 
     private function getSendersFromMappings($connection)
@@ -361,6 +479,15 @@ class Handler extends BaseHandler
         $validSenders = [
             'emails' => [$connection['sender_email']]
         ];
+
+        /*
+         * Read from the connection as well as the mappings. An install that added its
+         * extra senders in the connection form - or one saved before those two were kept
+         * in step - has them in `additional_senders` only, and the manager listing just
+         * the mappings would offer to add addresses that are already sending.
+         */
+        $additional = array_filter((array) Arr::get($connection, 'additional_senders', []));
+
         $verifiedDomain = explode('@', $connection['sender_email'])[1] ?? '';
 
         if ($verifiedDomain) {
@@ -378,10 +505,14 @@ class Handler extends BaseHandler
                 $mapSenders[$email] = $email;
             }
 
+            foreach ($additional as $email) {
+                $mapSenders[$email] = $email;
+            }
+
             $mapSenders = array_keys($mapSenders);
 
         } else {
-            $mapSenders = $validSenders['emails'];
+            $mapSenders = array_values(array_unique(array_merge($validSenders['emails'], $additional)));
         }
 
         return [

@@ -2,6 +2,8 @@
 
 namespace FluentMail\Includes;
 
+use FluentMail\App\Services\MicrosoftTokenTransport;
+
 class OAuth2Provider
 {
     private $options;
@@ -177,6 +179,8 @@ class OAuth2Provider
 
         $requestData = $this->getAccessTokenRequestDetails($params);
 
+        MicrosoftTokenTransport::register();
+
         $response = wp_remote_request($requestData['url'], $requestData['params']);
 
         if (is_wp_error($response)) {
@@ -185,21 +189,47 @@ class OAuth2Provider
             );
         }
 
-        $responseBody = wp_remote_retrieve_body($response);
+        $responseBody = json_decode(wp_remote_retrieve_body($response), true);
 
-        if (false === is_array($response)) {
+        if (!is_array($responseBody)) {
             throw new \Exception(
-                'Invalid response received from Authorization Server. Expected JSON.'
+                esc_html__('Invalid response received from Authorization Server. Expected JSON.', 'fluent-smtp')
             );
         }
 
-        if(empty(['access_token'])) {
+        /*
+         * The identity server answers a rejected grant with HTTP 400 and a JSON
+         * body describing why - most often invalid_grant, meaning the refresh
+         * token was revoked or expired through inactivity and the account has
+         * to be reconnected. That description is the only thing that tells a
+         * site owner what to actually do, so it is surfaced verbatim instead of
+         * being flattened into a generic failure.
+         */
+        if (!empty($responseBody['error'])) {
+            $description = '';
+
+            if (!empty($responseBody['error_description'])) {
+                $description = $responseBody['error_description'];
+            } elseif (is_string($responseBody['error'])) {
+                $description = $responseBody['error'];
+            }
+
             throw new \Exception(
-                'Invalid response received from Authorization Server.'
+                wp_kses_post(sprintf(
+                    /* translators: %s: error description returned by the OAuth authorization server */
+                    __('Authorization Server rejected the request: %s', 'fluent-smtp'),
+                    $description
+                ))
             );
         }
 
-        return \json_decode($responseBody, true);
+        if (empty($responseBody['access_token'])) {
+            throw new \Exception(
+                esc_html__('Invalid response received from Authorization Server. No access token was returned.', 'fluent-smtp')
+            );
+        }
+
+        return $responseBody;
     }
 
 
@@ -218,8 +248,9 @@ class OAuth2Provider
         return [
             'url' => $url,
             'params' => [
-                'method' => $method,
-                'body' => $options,
+                'method'      => $method,
+                'httpversion' => '1.1',
+                'body'        => $options,
                 'headers' => [
                     'content-type' => 'application/x-www-form-urlencoded'
                 ]

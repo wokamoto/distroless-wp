@@ -16,7 +16,7 @@
                 <!-- Header -->
                 <tr style="padding: 0; vertical-align: top; text-align: left;">
                     <td align="center" valign="middle" class="header" style="word-wrap: break-word; -webkit-hyphens: auto; -moz-hyphens: auto; hyphens: auto; border-collapse: collapse !important; vertical-align: top; mso-table-lspace: 0pt; mso-table-rspace: 0pt; -ms-text-size-adjust: 100%; -webkit-text-size-adjust: 100%; color: #444; font-family: 'Helvetica Neue',Helvetica,Arial,sans-serif; font-weight: normal; margin: 0; Margin: 0; font-size: 14px; mso-line-height-rule: exactly; line-height: 140%; text-align: center; padding: 30px 30px 22px 30px;">
-                        <img src="<?php echo esc_url( fluentMailMix('images/fluentsmtp.png')); ?>" width="164px" alt="Fluent SMTP Logo" style="outline: none; text-decoration: none; max-width: 100%; clear: both; -ms-interpolation-mode: bicubic; display: inline-block !important; width: 164px;">
+                        <img src="<?php echo esc_url( fluentMailMix('images/fluentsmtp.png')); ?>" width="164" alt="Fluent SMTP Logo" style="outline: none; text-decoration: none; max-width: 100%; clear: both; -ms-interpolation-mode: bicubic; display: inline-block !important; width: 164px;">
                     </td>
                 </tr>
                 <!-- Content -->
@@ -27,19 +27,26 @@
                                 <?php esc_html_e('Congrats, test email was sent successfully!', 'fluent-smtp') ?>
                             </p>
                             <p class="text-large" style="-ms-text-size-adjust: 100%; -webkit-text-size-adjust: 100%; color: #444; font-family: 'Helvetica Neue',Helvetica,Arial,sans-serif; font-weight: normal; padding: 0; text-align: left; mso-line-height-rule: exactly; line-height: 140%; margin: 0 0 15px 0; Margin: 0 0 15px 0; font-size: 16px;">
-                                <?php esc_html_e('Thank you for using Fluent SMTP Plugin. The ultimate SMTP plugin you need for making sure your emails are delivered.', 'fluent-smtp') ?><br /><br /><?php esc_html_e('FluentSMTP is a free opensource plugin and it will be always free ', 'fluent-smtp') ?>(<a href="https://fluentsmtp.com/why-we-built-fluentsmtp-plugin/"><?php esc_html_e('Learn why it\'s free', 'fluent-smtp') ?></a>).
+                                <?php esc_html_e('Thank you for using Fluent SMTP Plugin. The ultimate SMTP plugin you need for making sure your emails are delivered.', 'fluent-smtp') ?><br /><br /><?php esc_html_e('FluentSMTP is a free opensource plugin and it will be always free ', 'fluent-smtp') ?>(<a href="https://fluentsmtp.com/articles/why-we-built-fluentsmtp-plugin/"><?php esc_html_e('Learn why it\'s free', 'fluent-smtp') ?></a>).
                             </p>
 
                             <p class="signature" style="-ms-text-size-adjust: 100%; -webkit-text-size-adjust: 100%; color: #444; font-family: 'Helvetica Neue',Helvetica,Arial,sans-serif; font-weight: normal; padding: 0; font-size: 14px; mso-line-height-rule: exactly; line-height: 140%; text-align: left; margin: 20px 0 0 0; Margin: 20px 0 0 0;">
-                                <img src="<?php echo esc_url( fluentMailMix('images/mail_signature.png')); ?>" width="250" alt="Fluent SMTP Logo" style="outline: none; text-decoration: none; max-width: 100%; clear: both; -ms-interpolation-mode: bicubic; display: inline-block !important; width: 150px;">
+                                <img src="<?php echo esc_url( fluentMailMix('images/mail_signature.png')); ?>" width="150" alt="Fluent SMTP Logo" style="outline: none; text-decoration: none; max-width: 100%; clear: both; -ms-interpolation-mode: bicubic; display: inline-block !important; width: 150px;">
                             </p>
                             <p style="-ms-text-size-adjust: 100%; -webkit-text-size-adjust: 100%; color: #444; font-family: 'Helvetica Neue',Helvetica,Arial,sans-serif; font-weight: normal; padding: 0; text-align: left; font-size: 14px; mso-line-height-rule: exactly; line-height: 140%; margin: 0 0 15px 0; Margin: 0 0 15px 0;">
                                 Shahjahan Jewel<br>
-                                CEO, WPManageNinja LLC
+                                <?php esc_html_e('CEO, WPManageNinja LLC', 'fluent-smtp'); ?>
                             </p>
 
                             <p style="-ms-text-size-adjust: 100%; -webkit-text-size-adjust: 100%; color: #444; font-family: 'Helvetica Neue',Helvetica,Arial,sans-serif; font-weight: normal; padding: 0; text-align: left; font-size: 14px; mso-line-height-rule: exactly; line-height: 140%; margin: 20px 0 15px 0; Margin: 20px 0 15px 0;">
-                                <?php esc_html_e('This email was sent from ', 'fluent-smtp') ?><b><?php echo esc_html(get_bloginfo('name')); ?> at <?php echo esc_html(current_time('mysql')); ?></b>
+                                <?php
+                                echo wp_kses(sprintf(
+                                    /* translators: 1: site title, 2: date and time the email was sent */
+                                    __('This email was sent from %1$s at %2$s', 'fluent-smtp'),
+                                    '<b>' . esc_html(fluentMailSiteTitle()) . '</b>',
+                                    '<b>' . esc_html(current_time('mysql')) . '</b>'
+                                ), ['b' => []]);
+                                ?>
                             </p>
                         </div>
                     </td>

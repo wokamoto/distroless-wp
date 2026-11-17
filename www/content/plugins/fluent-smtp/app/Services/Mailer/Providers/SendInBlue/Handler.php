@@ -31,7 +31,7 @@ class Handler extends BaseHandler
             return $this->postSend();
         }
 
-        return $this->handleResponse(new \WP_Error(422, __('Something went wrong!', 'fluent-smtp'), []));
+        return $this->handleResponse(new \WP_Error(422, __('Something went wrong.', 'fluent-smtp'), []));
     }
 
     public function postSend()
@@ -87,7 +87,7 @@ class Handler extends BaseHandler
                     'messageId' => Arr::get($responseBody, 'messageId')
                 ];
             } else {
-                $returnResponse = new \WP_Error($responseCode, Arr::get($responseBody, 'message', __('SendInBlueError API Error', 'fluent-smtp')), $responseBody);
+                $returnResponse = new \WP_Error($responseCode, Arr::get($responseBody, 'message', __('Sendinblue API Error', 'fluent-smtp')), $responseBody);
             }
         }
 
@@ -168,16 +168,36 @@ class Handler extends BaseHandler
         $files = [];
 
         foreach ($this->getParam('attachments') as $attachment) {
-            if (is_file($attachment[0]) && is_readable($attachment[0])) {
-                $ext = pathinfo($attachment[0], PATHINFO_EXTENSION);
+            $name = self::attachmentName($attachment);
 
-                if (in_array($ext, $this->allowedAttachmentExts, true)) {
-                    $files[] = [
-                        'name'    => basename($attachment[0]),
-                        'content' => base64_encode(file_get_contents($attachment[0]))
-                    ];
-                }
+            // The allow-list is applied to the delivered name, the only file name
+            // Brevo receives; an in-memory attachment has no path. A file on disk
+            // also passes on its path's extension, as before, so a name such as
+            // "Rechnung Nr. 2024-001" for /uploads/r.pdf is still sent.
+            $allowed = in_array(strtolower(pathinfo($name, PATHINFO_EXTENSION)), $this->allowedAttachmentExts, true);
+            if (!$allowed && empty($attachment[5])) {
+                $allowed = in_array(strtolower(pathinfo((string) $attachment[0], PATHINFO_EXTENSION)), $this->allowedAttachmentExts, true);
             }
+
+            if (!$allowed) {
+                fluentMailDebugLog(sprintf(
+                    'SendInBlue: Skipped attachment %s - Brevo does not accept this file type',
+                    $name
+                ));
+                continue;
+            }
+
+            try {
+                $file = self::attachmentContent($attachment);
+            } catch (\Exception $e) {
+                $this->logAttachmentFailure('SendInBlue', $e);
+                continue;
+            }
+
+            $files[] = [
+                'name'    => $name,
+                'content' => base64_encode($file)
+            ];
         }
 
         return $files;

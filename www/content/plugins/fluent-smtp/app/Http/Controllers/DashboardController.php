@@ -3,10 +3,12 @@
 namespace FluentMail\App\Http\Controllers;
 
 use FluentMail\App\Models\Logger;
+use FluentMail\App\Services\ConnectionHealth;
 use FluentMail\App\Services\Mailer\Manager;
 use FluentMail\App\Services\Reporting;
 use FluentMail\Includes\Request\Request;
 use FluentMail\Includes\Support\Arr;
+use FluentMail\App\Services\Documentation;
 
 class DashboardController extends Controller
 {
@@ -17,8 +19,9 @@ class DashboardController extends Controller
         $connections = $manager->getSettings('connections', []);
 
         return $this->send([
-            'stats'         => $logger->getStats(),
-            'settings_stat' => [
+            'stats'              => $logger->getStats(),
+            'unhealthy_settings' => array_values((new ConnectionHealth())->getFailing()),
+            'settings_stat'      => [
                 'connection_counts' => count($connections),
                 'active_senders'    => count($manager->getSettings('mappings', [])),
                 'auto_delete_days'  => $manager->getSettings('misc.log_saved_interval_days'),
@@ -31,40 +34,47 @@ class DashboardController extends Controller
     {
         $this->verify();
 
+        // Validate and sanitize input with absint() and constrain to reasonable range
         $lastDay = 0;
         if (isset($_REQUEST['last_day'])) {
-            $lastDay = (int)$_REQUEST['last_day'];
+            $lastDay = absint($_REQUEST['last_day']);
+            // Constrain to reasonable range: 0-365 days
+            $lastDay = min(max($lastDay, 0), 365);
         }
 
         global $wpdb;
+        $tableName = $wpdb->prefix . 'fsmpt_email_logs';
+
         if ($lastDay > 6) {
-            $results = $wpdb->get_results("SELECT
-  DAYNAME(created_at) AS day_of_week,
-  HOUR(created_at) AS hour_of_day,
-  COUNT(*) AS count
-FROM
-  {$wpdb->prefix}fsmpt_email_logs
-WHERE
-  created_at >= NOW() - INTERVAL {$lastDay} DAY
-GROUP BY
-  DAYNAME(created_at),
-  HOUR(created_at)
-ORDER BY
-  FIELD(DAYNAME(created_at), 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'),
-  HOUR(created_at)");
+            // Use wpdb->prepare() with proper placeholder for the interval value
+            $results = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT
+                        DAYNAME(created_at) AS day_of_week,
+                        HOUR(created_at) AS hour_of_day,
+                        COUNT(*) AS count
+                    FROM {$tableName}
+                    WHERE created_at >= NOW() - INTERVAL %d DAY
+                    GROUP BY
+                        DAYNAME(created_at),
+                        HOUR(created_at)",
+                    $lastDay
+                )
+            );
         } else {
-            $results = $wpdb->get_results("SELECT
-  DAYNAME(created_at) AS day_of_week,
-  HOUR(created_at) AS hour_of_day,
-  COUNT(*) AS count
-FROM
-  {$wpdb->prefix}fsmpt_email_logs
-GROUP BY
-  DAYNAME(created_at),
-  HOUR(created_at)
-ORDER BY
-  FIELD(DAYNAME(created_at), 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'),
-  HOUR(created_at)");
+            // Query for all time data when lastDay <= 6
+            // Table name is safe - constructed from WordPress prefix and hard-coded table suffix
+            // No user input in this query, so prepare() is not needed
+            $results = $wpdb->get_results(
+                "SELECT
+                    DAYNAME(created_at) AS day_of_week,
+                    HOUR(created_at) AS hour_of_day,
+                    COUNT(*) AS count
+                FROM {$tableName}
+                GROUP BY
+                    DAYNAME(created_at),
+                    HOUR(created_at)"
+            );
         }
 
         // Assuming $results is the array of records fetched from the database.
@@ -104,30 +114,45 @@ ORDER BY
 
     }
 
-    public function getDocs()
+    public function getDocs(Manager $manager)
     {
         $this->verify();
 
-        $request = wp_remote_get('https://fluentsmtp.com/wp-json/wp/v2/docs?per_page=100');
+        $documentation = new Documentation();
+        $docs = $documentation->getDocs();
+        if (is_wp_error($docs)) {
+            return $this->sendError(['message' => $docs->get_error_message()], 503);
+        }
 
-        $docs = json_decode(wp_remote_retrieve_body($request), true);
-
-
-        $formattedDocs = [];
-
-        foreach ($docs as $doc) {
-            $primaryCategory = Arr::get($doc, 'taxonomy_info.doc_category.0', ['value' => 'none', 'label' => 'Other']);
-            $formattedDocs[] = [
-                'title'    => $doc['title']['rendered'],
-                'content'  => $doc['content']['rendered'],
-                'link'     => $doc['link'],
-                'category' => $primaryCategory
-            ];
+        // The guides for the services this site actually sends through, so the page
+        // can put them first. Keyed by article, valued by provider key so the page
+        // can show the provider's logo on the tile.
+        $providers = [];
+        foreach ($manager->getSettings('connections', []) as $connection) {
+            $providers[] = Arr::get($connection, 'provider_settings.provider');
         }
 
         return $this->send([
-            'docs' => $formattedDocs
+            'docs'      => $docs,
+            'suggested' => $documentation->suggestedFor($docs, $providers),
+            'providers' => $this->providerCards($manager)
         ]);
+    }
+
+    /**
+     * Title and logo per provider, which is all the docs page needs to label a
+     * suggested article with the connection it is for.
+     */
+    private function providerCards(Manager $manager)
+    {
+        $cards = [];
+        foreach ($manager->getConfig('providers', []) as $key => $provider) {
+            $cards[$key] = [
+                'title' => Arr::get($provider, 'title', $key),
+                'image' => Arr::get($provider, 'image', '')
+            ];
+        }
+        return $cards;
     }
 
 }

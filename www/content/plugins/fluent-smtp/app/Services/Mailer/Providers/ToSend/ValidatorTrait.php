@@ -34,19 +34,46 @@ trait ValidatorTrait
 
         if ($apiKey) {
             $senderEmail = Arr::get($connection, 'sender_email');
-            if ($senderEmail) {
+            $additionalSenders = array_filter((array) Arr::get($connection, 'additional_senders', []));
+
+            if ($senderEmail || $additionalSenders) {
                 $accountInfo = $this->getAccountInfo($apiKey);
                 if (is_wp_error($accountInfo)) {
                     $errors['api_key']['required'] = $accountInfo->get_error_message();
                 } else {
                     if (empty($accountInfo['verified_domains'])) {
-                        $errors['api_key']['required'] = 'No verified domains found in FluentMailer API';
+                        $errors['api_key']['required'] = __('No verified domains found for this toSend API key.', 'fluent-smtp');
                     } else {
-                        $emailDomain = explode('@', $senderEmail)[1];
                         $verifiedDomains = $accountInfo['verified_domains'];
-                        if (!in_array($emailDomain, $accountInfo['verified_domains'])) {
-                            $errors['sender_email']['required'] = 'Please provide a sender email that match with your verfied emails. Verfied domains: ' . implode(', ', $verifiedDomains) . '.';
-                            $errors['api_key']['required'] = 'Please provide a sender email that match with your verfied emails. Verfied domains: ' . implode(', ', $verifiedDomains) . '.';
+                        // Domains are case-insensitive, and toSend lowercases the
+                        // sender domain when it sends, so compare the same way here.
+                        $verifiedLower = array_map('strtolower', $verifiedDomains);
+                        $domainListMsg = sprintf(
+                            __('Verified domains on this API key: %s.', 'fluent-smtp'),
+                            implode(', ', $verifiedDomains)
+                        );
+
+                        if ($senderEmail) {
+                            $emailDomain = substr(strrchr($senderEmail, '@'), 1);
+                            if (!$emailDomain || !in_array(strtolower($emailDomain), $verifiedLower, true)) {
+                                $errors['sender_email']['required'] = __('Sender email domain is not verified in toSend. ', 'fluent-smtp') . $domainListMsg;
+                            }
+                        }
+
+                        $invalidAdditional = [];
+                        foreach ($additionalSenders as $extra) {
+                            if (!is_email($extra)) {
+                                $invalidAdditional[] = $extra . ' ' . __('(invalid format)', 'fluent-smtp');
+                                continue;
+                            }
+                            $extraDomain = substr(strrchr($extra, '@'), 1);
+                            if (!$extraDomain || !in_array(strtolower($extraDomain), $verifiedLower, true)) {
+                                $invalidAdditional[] = $extra;
+                            }
+                        }
+
+                        if ($invalidAdditional) {
+                            $errors['additional_senders']['required'] = __('These additional senders are not on a verified toSend domain: ', 'fluent-smtp') . implode(', ', $invalidAdditional) . '. ' . $domainListMsg;
                         }
                     }
                 }
@@ -61,7 +88,7 @@ trait ValidatorTrait
     public function getAccountInfo($apiKey)
     {
         $request = wp_remote_get($this->baseUrl . 'info?api_key=' . $apiKey, [
-            'sslverify' => false
+            'sslverify' => true
         ]);
 
         if (is_wp_error($request)) {
@@ -74,7 +101,7 @@ trait ValidatorTrait
         $body = json_decode($body, true);
 
         if (!$body || !is_array($body)) {
-            return new \WP_Error('invalid_response', 'Invalid Reponse from remote server');
+            return new \WP_Error('invalid_response', __('Invalid Response from remote server', 'fluent-smtp'));
         }
 
         if ($statusCode === 200) {
@@ -95,7 +122,7 @@ trait ValidatorTrait
         $message = Arr::get($body, 'message');
 
         if (!$message) {
-            $message = 'Unknown error from remote server';
+            $message = __('Unknown error from remote server', 'fluent-smtp');
         }
 
         return new \WP_Error('invalid_response', $message, $body);

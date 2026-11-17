@@ -17,13 +17,18 @@ class Handler extends BaseHandler
 
     protected $url = 'https://api.sendgrid.com/v3/mail/send';
 
+    protected $regionHosts = [
+        'global' => 'api.sendgrid.com',
+        'eu'     => 'api.eu.sendgrid.com',
+    ];
+
     public function send()
     {
         if ($this->preSend()) {
             return $this->postSend();
         }
 
-        return $this->handleResponse(new \WP_Error(422, __('Something went wrong!', 'fluent-smtp'), []));
+        return $this->handleResponse(new \WP_Error(422, __('Something went wrong.', 'fluent-smtp'), []));
     }
 
     public function postSend()
@@ -51,7 +56,7 @@ class Handler extends BaseHandler
 
         $params = array_merge($params, $this->getDefaultParams());
 
-        $response = wp_safe_remote_post($this->url, $params);
+        $response = wp_safe_remote_post($this->getApiUrl(), $params);
 
         if (is_wp_error($response)) {
             $returnResponse = new \WP_Error($response->get_error_code(), $response->get_error_message(), $response->get_error_messages());
@@ -67,13 +72,22 @@ class Handler extends BaseHandler
                     'message' => Arr::get($responseBody, 'message')
                 ];
             } else {
-                $returnResponse = new \WP_Error($responseCode, Arr::get($responseBody, 'errors.0.message', 'Unknown Error'), $responseBody);
+                $returnResponse = new \WP_Error($responseCode, Arr::get($responseBody, 'errors.0.message', __('Unknown Error', 'fluent-smtp')), $responseBody);
             }
         }
 
         $this->response = $returnResponse;
 
         return $this->handleResponse($this->response);
+    }
+
+    protected function getApiUrl()
+    {
+        $region = $this->getSetting('region');
+
+        return is_string($region) && isset($this->regionHosts[$region])
+            ? 'https://' . $this->regionHosts[$region] . '/v3/mail/send'
+            : $this->url;
     }
 
     protected function getFrom()
@@ -165,31 +179,29 @@ class Handler extends BaseHandler
         $data = [];
 
         foreach ($this->getParam('attachments') as $attachment) {
-            $file = false;
-
             try {
-                if (is_file($attachment[0]) && is_readable($attachment[0])) {
-                    $fileName = basename($attachment[0]);
-                    $contentId = wp_hash($attachment[0]);
-                    $file = file_get_contents($attachment[0]);
-                    $mimeType = mime_content_type($attachment[0]);
-                    $filetype = str_replace(';', '', trim($mimeType));
-                }
+                $file = self::attachmentContent($attachment);
             } catch (\Exception $e) {
-                $file = false;
-            }
-
-            if ($file === false) {
+                $this->logAttachmentFailure('SendGrid', $e);
                 continue;
             }
 
-            $data[] = [
-                'type'        => $filetype,
-                'filename'    => $fileName,
+            $row = [
+                'type'        => self::attachmentType($attachment),
+                'filename'    => self::attachmentName($attachment),
                 'disposition' => 'attachment',
-                'content_id'  => $contentId,
+                'content_id'  => wp_hash($attachment[0]),
                 'content'     => base64_encode($file)
             ];
+
+            // An embedded image goes out inline under its own cid, so the HTML shows it.
+            $contentId = self::inlineContentId($attachment);
+            if ($contentId !== '') {
+                $row['disposition'] = 'inline';
+                $row['content_id'] = $contentId;
+            }
+
+            $data[] = $row;
         }
 
         return $data;

@@ -5,6 +5,7 @@ namespace FluentMail\App\Models;
 use Exception;
 use InvalidArgumentException;
 use FluentMail\Includes\Support\Arr;
+use FluentMail\App\Services\Mailer\BaseHandler;
 
 class Logger extends Model
 {
@@ -24,6 +25,21 @@ class Logger extends Model
     ];
 
     protected $searchables = [
+        'to',
+        'from',
+        'subject'
+    ];
+
+    /*
+     * Columns log navigation may filter on. `filter_by` arrives from the
+     * request and lands in the query as an identifier, which prepare() cannot
+     * bind, so a value outside this list is dropped instead of interpolated.
+     * Every key is re-checked against it in buildWhere()'s loop, which is the
+     * one place an identifier is written into SQL.
+     */
+    protected $filterables = [
+        'status',
+        'created_at',
         'to',
         'from',
         'subject'
@@ -97,16 +113,56 @@ class Logger extends Model
     {
         $where = [];
 
-        if (isset($data['filter_by_value'])) {
-            $where[$data['filter_by']] = $data['filter_by_value'];
+        $filterBy = Arr::get($data, 'filter_by');
+
+        if (isset($data['filter_by_value']) && in_array($filterBy, $this->filterables, true)) {
+            $value = $this->normalizeFilterValue($filterBy, $data['filter_by_value']);
+
+            if (!is_null($value)) {
+                $where[$filterBy] = $value;
+            }
         }
 
-        if (isset($data['query'])) {
-            foreach ($this->searchables as $column) {
+        /*
+         * The date range travels beside filter_by rather than through it.
+         *
+         * There is only one filter_by slot and the logs screen already spends it on
+         * status, so a viewer opened from a date-filtered list had no range at all and
+         * its Prev/Next walked straight out of the result set the user was looking at.
+         * Normalized through the same helper so the pair reaching the loop is scalar.
+         */
+        $dateRange = $this->normalizeFilterValue('created_at', Arr::get($data, 'date_range'));
+
+        if (!isset($where['created_at']) && is_array($dateRange)) {
+            $where['created_at'] = $dateRange;
+        }
+
+        if (isset($data['query']) && is_scalar($data['query']) && trim($data['query']) !== '') {
+            $query = trim($data['query']);
+            $columns = $this->searchables;
+
+            /*
+             * The same reading get() gives the search box: `subject:invoice` is a
+             * search of that one column, not of every column for the literal text.
+             * The viewer's Prev and Next walk the list the search produced, so a
+             * column search that the list understood and the navigation did not
+             * left Next with nothing to land on.
+             */
+            if (strpos($query, ':')) {
+                $parts = explode(':', $query);
+                $column = array_shift($parts);
+
+                if (in_array($column, $this->filterables, true)) {
+                    $columns = [$column];
+                    $query = trim(implode(':', $parts));
+                }
+            }
+
+            foreach ($columns as $column) {
                 if (isset($where[$column])) {
-                    $where[$column] .= '|' . $data['query'];
+                    $where[$column] .= '|' . $query;
                 } else {
-                    $where[$column] = $data['query'];
+                    $where[$column] = $query;
                 }
             }
         }
@@ -116,6 +172,10 @@ class Logger extends Model
         $whereClause = "WHERE 1 = '%d'";
 
         foreach ($where as $key => $value) {
+            if (!in_array($key, $this->filterables, true)) {
+                continue;
+            }
+
             if (in_array($key, ['status', 'created_at'])) {
                 if ($key == 'created_at') {
                     if (is_array($value)) {
@@ -155,6 +215,32 @@ class Logger extends Model
         return [$whereClause, $args];
     }
 
+    /**
+     * `created_at` is the one filter carried as a [from, to] pair; every other
+     * column takes a single value. The request can send either as an array, so
+     * anything that would reach the string operations in buildWhere() as a
+     * non-scalar is normalized here or dropped. Returns null when there is
+     * nothing usable left.
+     */
+    protected function normalizeFilterValue($column, $value)
+    {
+        if (is_scalar($value)) {
+            return $value;
+        }
+
+        if ($column != 'created_at' || !is_array($value)) {
+            return null;
+        }
+
+        $value = array_values(array_filter($value, 'is_scalar'));
+
+        if (count($value) > 1) {
+            return [$value[0], $value[1]];
+        }
+
+        return count($value) ? $value[0] : null;
+    }
+
     protected function formatResult($result)
     {
         $result = is_array($result) ? $result : func_get_args();
@@ -163,12 +249,99 @@ class Logger extends Model
             $result[$key]['id']      = (int)$result[$key]['id'];
             $result[$key]['retries'] = (int)$result[$key]['retries'];
             $result[$key]['from']    = htmlspecialchars($result[$key]['from']);
-            $result[$key]['subject'] = wp_kses_post(
-                wp_unslash($result[$key]['subject'])
-            );
+            /*
+             * No wp_kses_post() here. Both consumers render the subject as text
+             * — {{ }} in Logs.vue and LogViewer.vue, which escapes on its own —
+             * so kses adds no safety, and its entity normalization rewrites a
+             * subject reading "Tom & Jerry" to "Tom &amp; Jerry", which the
+             * page then shows verbatim. Anything that puts a subject into
+             * HTML has to escape it at that point, as digest_email.php does.
+             */
+            $result[$key]['subject'] = wp_unslash($result[$key]['subject']);
+
+            if (array_key_exists('attachments', $result[$key])) {
+                $result[$key]['attachment_list'] = static::describeAttachments($result[$key]['attachments']);
+                $result[$key]['attachments'] = BaseHandler::attachmentsForLog($result[$key]['attachments']);
+            }
         }
 
         return $result;
+    }
+
+    /**
+     * Each logged attachment with whether a resend can include it.
+     *
+     * - `ok`: a file that is still readable where it was attached from.
+     * - `in_memory`: data the sending plugin built in memory (addStringAttachment(),
+     *   e.g. an invoice PDF). The log does not keep the data, so it cannot be resent.
+     * - `missing`: a file that has been deleted, moved or can no longer be read.
+     * - `unchecked`: a file whose state was not looked up ($checkFiles false).
+     *
+     * The log list and viewer do not check files: that is a few filesystem calls
+     * per attachment on every page load, slow on network storage, for a state
+     * that only matters when a resend is about to run. The resend actions ask
+     * for it through attachmentStatus() instead.
+     *
+     * @param mixed $attachments The unserialized `attachments` column.
+     * @param bool  $checkFiles  Look up whether each file can still be read.
+     * @return array[] [['name' => string, 'status' => string, 'inline' => bool, 'size' => int|null], ...]
+     */
+    public static function describeAttachments($attachments, $checkFiles = false)
+    {
+        if (!is_array($attachments)) {
+            return [];
+        }
+
+        $list = [];
+
+        foreach ($attachments as $attachment) {
+            $described = static::describeAttachment($attachment, $checkFiles);
+
+            if ($described) {
+                unset($described['record']);
+                $list[] = $described;
+            }
+        }
+
+        return $list;
+    }
+
+    /**
+     * One logged attachment, normalized: its PHPMailer record and how it stands.
+     *
+     * @param mixed $attachment A PHPMailer record, or a bare path from very old rows.
+     * @param bool  $checkFiles Look up whether a file can still be read; otherwise its status is `unchecked`.
+     * @return array|null ['name', 'status', 'inline', 'size', 'record'], or null when the entry is not an attachment.
+     */
+    protected static function describeAttachment($attachment, $checkFiles = true)
+    {
+        if (is_string($attachment) && $attachment !== '') {
+            $attachment = [$attachment, basename($attachment), basename($attachment)];
+        }
+
+        if (!is_array($attachment)) {
+            return null;
+        }
+
+        $inMemory = !empty($attachment[5]);
+        $path = isset($attachment[0]) && is_string($attachment[0]) ? $attachment[0] : '';
+        $readable = !$inMemory && $checkFiles && BaseHandler::isReadableAttachmentPath($path);
+
+        if ($inMemory) {
+            $size = isset($attachment[8]) ? (int) $attachment[8] : (is_string($path) ? strlen($path) : null);
+            $status = 'in_memory';
+        } else {
+            $size = $readable ? (int) @filesize($path) : null;
+            $status = !$checkFiles ? 'unchecked' : ($readable ? 'ok' : 'missing');
+        }
+
+        return [
+            'name'   => (string) BaseHandler::attachmentName($attachment),
+            'status' => $status,
+            'inline' => isset($attachment[6]) && $attachment[6] === 'inline',
+            'size'   => $size,
+            'record' => $attachment,
+        ];
     }
 
     protected function maybeUnserialize(array $data)
@@ -177,6 +350,10 @@ class Logger extends Model
             if ($this->isUnserializable($key)) {
                 $data[$key] = $this->unserialize($value);
             }
+        }
+
+        if (array_key_exists('to', $data)) {
+            $data['to'] = $this->normalizeLoggedRecipients($data['to']);
         }
         
         return $data;
@@ -205,6 +382,53 @@ class Logger extends Model
         }
 
         return $data;
+    }
+
+    /**
+     * Turn a stored `to` value into the `[{email, name?}, ...]` shape the log
+     * UI and resend path expect.
+     *
+     * Rows written while `to` was VARCHAR(255) can hold a clipped serialize
+     * blob that `is_serialized()` rejects. Pull complete addresses out of
+     * that fragment so the viewer does not print `a:7:{i:0;a:1:{s:5:"email"`
+     * and resend does not foreach a string. A trailing half-written address
+     * is dropped because it is not a valid mailbox.
+     *
+     * @param mixed $to
+     * @return array|mixed
+     */
+    protected function normalizeLoggedRecipients($to)
+    {
+        if (is_array($to)) {
+            return $to;
+        }
+
+        if (!is_string($to) || $to === '') {
+            return $to;
+        }
+
+        $recipients = [];
+
+        if (strpos(ltrim($to), 'a:') === 0) {
+            if (preg_match_all('/s:\d+:"([^"]+)"/', $to, $matches)) {
+                foreach ($matches[1] as $value) {
+                    if (is_email($value)) {
+                        $recipients[] = ['email' => $value];
+                    }
+                }
+            }
+
+            return $recipients;
+        }
+
+        foreach (preg_split('/[\s,;]+/', $to) as $address) {
+            $address = trim($address, " \t\n\r\0\x0B<>");
+            if (is_email($address)) {
+                $recipients[] = ['email' => $address];
+            }
+        }
+
+        return $recipients ?: $to;
     }
 
     protected function formatHeaders($headers)
@@ -240,7 +464,17 @@ class Logger extends Model
     public function delete(array $id)
     {
         if ($id && $id[0] == 'all') {
-            return $this->db->query("TRUNCATE TABLE {$this->table}");
+            // TRUNCATE doesn't support parameterization
+            // Table name is safe - constructed from constants in __construct()
+            $result = $this->db->query("TRUNCATE TABLE {$this->table}");
+
+            // The table is empty now, so widening an old VARCHAR `to` column is instant.
+            if ($result !== false) {
+                require_once FLUENTMAIL_PLUGIN_PATH . 'database/migrations/EmailLogs.php';
+                \FluentMailMigrations\EmailLogs::maybeWidenToColumn($this->table);
+            }
+
+            return $result;
         }
 
         $ids = array_filter($id, 'intval');
@@ -263,7 +497,14 @@ class Logger extends Model
             }
         }
 
-        $id = $data['id'];
+        /*
+         * The cursor is bound as '%d', so it cannot carry SQL either way, but
+         * an array-shaped `id` from the request reaches prepare() as an
+         * unsupported argument type and trips _doing_it_wrong(), which prints
+         * a notice into the AJAX response body on a debug site. Narrowed to an
+         * integer here instead.
+         */
+        $id = isset($data['id']) && is_scalar($data['id']) ? (int) $data['id'] : 0;
 
         $dir = isset($data['dir']) ? $data['dir'] : null;
 
@@ -313,6 +554,38 @@ class Logger extends Model
         ];
     }
 
+    /**
+     * Whether a resend of each log can still include its attachments.
+     *
+     * Called by the resend actions just before they run, for the logs that have
+     * attachments, so the log list itself never touches the filesystem.
+     *
+     * @param int[] $ids At most 50 log ids; the rest are ignored.
+     * @return array Log id => describeAttachments() list, with files checked.
+     */
+    public function attachmentStatus(array $ids)
+    {
+        $ids = array_slice(array_values(array_unique(array_filter(array_map('intval', $ids)))), 0, 50);
+
+        if (!$ids) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '%d'));
+        $rows = $this->db->get_results($this->db->prepare(
+            "SELECT `id`, `attachments` FROM {$this->table} WHERE `id` IN ({$placeholders})",
+            $ids
+        ));
+
+        $statuses = [];
+
+        foreach ((array) $rows as $row) {
+            $statuses[(int) $row->id] = static::describeAttachments($this->unserialize($row->attachments), true);
+        }
+
+        return $statuses;
+    }
+
     public function find($id)
     {
 
@@ -327,38 +600,86 @@ class Logger extends Model
         return (array)$row;
     }
 
-    public function resendEmailFromLog($id, $type = 'retry')
+    public function resendEmailFromLog($id, $type = 'retry', $recipients = [])
     {
         $email = $this->find($id);
 
-        $email['to']          = $this->unserialize($email['to']);
+        $email['to']          = $this->normalizeLoggedRecipients($this->unserialize($email['to']));
         $email['headers']     = $this->unserialize($email['headers']);
         $email['attachments'] = $this->unserialize($email['attachments']);
         $email['extra']       = $this->unserialize($email['extra']);
 
-        // Convert PHPMailer attachment format to wp_mail format
+        /*
+         * Files still on disk go out again under their original name, and inline
+         * images with their original cid, through wp_mail()'s own arguments: an
+         * attachment keyed by its file name, and embeds keyed by cid. No hook is
+         * needed, so filters, pre_wp_mail transports and queue plugins see the
+         * same files the resend sends. In-memory attachments and files that are
+         * gone cannot be included; they are reported back so the admin is told.
+         */
+        $skippedAttachments = [];
         $wpMailAttachments = [];
-        if (!empty($email['attachments']) && is_array($email['attachments'])) {
-            foreach ($email['attachments'] as $attachment) {
-                if (is_array($attachment)) {
-                    // PHPMailer format: [path, filename, name, encoding, type, isString, disposition, cid]
-                    if (isset($attachment[0]) && is_string($attachment[0])) {
-                        $filePath = $attachment[0];
-                        if (file_exists($filePath) && is_readable($filePath)) {
-                            $wpMailAttachments[] = $filePath;
-                        }
-                    }
-                } elseif (is_string($attachment)) {
-                    if (file_exists($attachment) && is_readable($attachment)) {
-                        $wpMailAttachments[] = $attachment;
-                    }
-                }
+        $wpMailEmbeds = [];
+        $embedMeta = [];
+
+        // Another plugin's wp_mail() may not take $embeds (the sixth argument). Inline
+        // images then go out as ordinary attachments rather than being dropped.
+        $acceptsEmbeds = true;
+        try {
+            $wpMail = new \ReflectionFunction('wp_mail');
+            // A variadic wrapper (wp_mail(...$args)) forwards whatever it is given.
+            $acceptsEmbeds = $wpMail->isVariadic() || $wpMail->getNumberOfParameters() >= 6;
+        } catch (\ReflectionException $e) {
+            $acceptsEmbeds = true;
+        }
+
+        foreach ((is_array($email['attachments']) ? $email['attachments'] : []) as $attachment) {
+            $described = static::describeAttachment($attachment);
+
+            if (!$described) {
+                continue;
+            }
+
+            if ($described['status'] !== 'ok') {
+                $skippedAttachments[] = ['name' => $described['name'], 'status' => $described['status']];
+                continue;
+            }
+
+            $path = $described['record'][0];
+            $cid = isset($described['record'][7]) ? (string) $described['record'][7] : '';
+
+            if ($acceptsEmbeds && $described['inline'] && $cid !== '' && !isset($wpMailEmbeds[$cid])) {
+                $wpMailEmbeds[$cid] = $path;
+                $embedMeta[$cid] = [
+                    'path' => $path,
+                    'name' => $described['name'],
+                    'type' => isset($described['record'][4]) ? (string) $described['record'][4] : '',
+                ];
+                continue;
+            }
+
+            // A name that is already used, or one PHP would turn into an integer key,
+            // cannot be a key; that file goes out under its own file name instead.
+            $name = $described['name'];
+            if ($name === '' || isset($wpMailAttachments[$name]) || (string) (int) $name === $name) {
+                $wpMailAttachments[] = $path;
+            } else {
+                $wpMailAttachments[$name] = $path;
             }
         }
+
+        // When custom recipients are provided, drop cc/bcc headers so the email
+        // is only delivered to the requested address(es).
+        $hasCustomRecipients = !empty($recipients) && is_array($recipients);
+        $skipHeaderKeys = $hasCustomRecipients ? ['cc', 'bcc'] : [];
 
         $headers = [];
 
         foreach ($email['headers'] as $key => $value) {
+
+            if (in_array(strtolower((string) $key), $skipHeaderKeys, true)) {
+                continue;
+            }
 
             if($key == 'content-type' && $value == 'multipart/alternative') {
                 $value = 'text/html';
@@ -374,7 +695,10 @@ class Logger extends Model
                     $values[] = $v;
                 }
                 if ($values) {
-                    $headers[] = "{$key}: " . implode(';', $values);
+                    // wp_mail() splits Cc, Bcc and Reply-To on commas only; any
+                    // other separator turns the list into one invalid address,
+                    // which is silently dropped.
+                    $headers[] = "{$key}: " . implode(', ', $values);
                 }
             } else {
                 if ($value) {
@@ -387,12 +711,25 @@ class Logger extends Model
             'From: ' . $email['from']
         ]);
 
-        $to = [];
-        foreach ($email['to'] as $recipient) {
-            if (isset($recipient['name'])) {
-                $to[] = $recipient['name'] . ' <' . $recipient['email'] . '>';
-            } else {
-                $to[] = $recipient['email'];
+        if ($hasCustomRecipients) {
+            $to = array_values($recipients);
+        } else {
+            $to = [];
+            foreach ((array)$email['to'] as $recipient) {
+                if (!is_array($recipient)) {
+                    if (is_string($recipient) && is_email($recipient)) {
+                        $to[] = $recipient;
+                    }
+                    continue;
+                }
+                if (empty($recipient['email'])) {
+                    continue;
+                }
+                if (!empty($recipient['name'])) {
+                    $to[] = $recipient['name'] . ' <' . $recipient['email'] . '>';
+                } else {
+                    $to[] = $recipient['email'];
+                }
             }
         }
 
@@ -401,13 +738,37 @@ class Logger extends Model
                 define('FLUENTMAIL_LOG_OFF', true);
             }
 
-            $result = wp_mail(
-                $to,
-                $email['subject'],
-                $email['body'],
-                $headers,
-                $wpMailAttachments  // Use the converted attachment format
-            );
+            $startedAt = microtime(true);
+
+            // wp_mail() names an embed after its path and detects its type; give the
+            // resend's own embeds (same path and cid) their logged name and type.
+            $embedArgs = function ($args) use ($embedMeta) {
+                $cid = isset($args['cid']) ? (string) $args['cid'] : '';
+                if (isset($embedMeta[$cid]) && isset($args['path']) && $args['path'] === $embedMeta[$cid]['path']) {
+                    $args['name'] = $embedMeta[$cid]['name'];
+                    if ($embedMeta[$cid]['type'] !== '') {
+                        $args['type'] = $embedMeta[$cid]['type'];
+                    }
+                }
+                return $args;
+            };
+
+            add_filter('wp_mail_embed_args', $embedArgs);
+
+            try {
+                $result = wp_mail(
+                    $to,
+                    $email['subject'],
+                    $email['body'],
+                    $headers,
+                    $wpMailAttachments,
+                    $wpMailEmbeds
+                );
+            } finally {
+                remove_filter('wp_mail_embed_args', $embedArgs);
+            }
+
+            $durationMs = round((microtime(true) - $startedAt) * 1000, 1);
 
             $updateData = [
                 'status'     => 'sent',
@@ -420,21 +781,80 @@ class Logger extends Model
 
             if ($type == 'resend') {
                 $updateData['resent_count'] = intval($email['resent_count']) + 1;
+                $updateData['extra'] = maybe_serialize(
+                    $this->appendResendRecord($email['extra'], $to, (bool)$result, $durationMs)
+                );
             } else {
                 $updateData['retries'] = intval($email['retries']) + 1;
             }
 
             if ($this->updateLog($updateData, ['id' => $id])) {
                 $email                = $this->find($id);
-                $email['to']          = $this->unserialize($email['to']);
+                $email['to']          = $this->normalizeLoggedRecipients($this->unserialize($email['to']));
                 $email['headers']     = $this->unserialize($email['headers']);
                 $email['attachments'] = $this->unserialize($email['attachments']);
                 $email['extra']       = $this->unserialize($email['extra']);
+                $email['attachment_list']     = static::describeAttachments($email['attachments']);
+                $email['attachments']         = BaseHandler::attachmentsForLog($email['attachments']);
+                $email['skipped_attachments'] = $skippedAttachments;
+                $email['resend_succeeded']    = (bool) $result;
                 return $email;
             }
         } catch (\PHPMailer\PHPMailer\Exception $e) {
             throw $e;
         }
+    }
+
+    /**
+     * Record where a resend actually went.
+     *
+     * A resend can now be redirected to an address other than the original
+     * recipient, and resent_count alone only says that it happened, not where
+     * it landed - so a log row could show three resends with nothing to say
+     * that two of them went to somebody else entirely. The trail lives in the
+     * existing `extra` column, which needs no schema change, and the row's own
+     * `to` stays untouched as the record of the original send.
+     *
+     * @param mixed $extra The unserialized `extra` column.
+     * @param array $to    Recipients this resend was addressed to.
+     * @param bool  $sent  Whether the send itself reported success.
+     * @param float $ms    How long the send took, in milliseconds.
+     * @return array
+     */
+    protected function appendResendRecord($extra, $to, $sent, $ms = null)
+    {
+        $extra = is_array($extra) ? $extra : [];
+
+        $resends = [];
+
+        if (!empty($extra['resends']) && is_array($extra['resends'])) {
+            $resends = $extra['resends'];
+        }
+
+        $user = wp_get_current_user();
+
+        $resends[] = [
+            'at'   => current_time('mysql'),
+            'to'   => array_values(array_map('strval', (array)$to)),
+            // The display name as it stood at the time. Storing an ID would
+            // leave the trail unreadable once the account is deleted, which is
+            // exactly when it matters.
+            'by'   => ($user && $user->exists()) ? $user->display_name : '',
+            'sent' => $sent,
+            'ms'   => $ms
+        ];
+
+        // Keep the tail. A row that gets resent all day should not grow its
+        // extra column without bound.
+        $limit = apply_filters('fluentsmtp_resend_history_limit', 20);
+
+        if (count($resends) > $limit) {
+            $resends = array_slice($resends, -$limit);
+        }
+
+        $extra['resends'] = array_values($resends);
+
+        return $extra;
     }
 
     public function updateLog($data, $where)
@@ -444,8 +864,9 @@ class Logger extends Model
 
     public function getStats()
     {
-        $succeeded = $this->db->get_var("select COUNT(id) from {$this->table} where status='sent'");
-        $failed = $this->db->get_var("select COUNT(id) from {$this->table} where status='failed'");
+        // Status values are hardcoded, no need for prepare()
+        $succeeded = $this->db->get_var("SELECT COUNT(id) FROM {$this->table} WHERE status = 'sent'");
+        $failed = $this->db->get_var("SELECT COUNT(id) FROM {$this->table} WHERE status = 'failed'");
 
         return [
             'sent'   => $succeeded,
@@ -458,13 +879,40 @@ class Logger extends Model
         try {
 
             $date = gmdate('Y-m-d H:i:s', current_time('timestamp') - $days * DAY_IN_SECONDS);
-            $query = $this->db->prepare("DELETE FROM {$this->table} WHERE `created_at` < %s", $date);
-            return $this->db->query($query);
+
+            /*
+             * Deleted in batches rather than in one statement. A site that has
+             * been logging for months can have this cron pass hit hundreds of
+             * thousands of rows, and a single unbounded DELETE holds locks for
+             * the whole scan - long enough to time out and leave the backlog
+             * permanently uncleared, since the next run faces the same pile.
+             * Batches let each statement commit and release.
+             */
+            $batchSize = (int)apply_filters('fluentmail_log_delete_batch_size', 2000);
+            $batchSize = max(1, $batchSize);
+
+            $deleted = 0;
+
+            do {
+                $query = $this->db->prepare(
+                    "DELETE FROM {$this->table} WHERE `created_at` < %s LIMIT %d",
+                    $date,
+                    $batchSize
+                );
+
+                $result = $this->db->query($query);
+
+                if (!$result) {
+                    break;
+                }
+
+                $deleted += $result;
+            } while ($result >= $batchSize);
+
+            return $deleted;
 
         } catch (Exception $e) {
-            if (wp_get_environment_type() != 'production') {
-                error_log('Message: ' . $e->getMessage());
-            }
+            fluentMailDebugLog('Failed to delete old email logs - ' . $e->getMessage());
         }
     }
 
@@ -513,6 +961,9 @@ class Logger extends Model
 
     public function getSubjectStat($status, $statDate, $endDate, $limit = 5)
     {
+        // Sanitize and validate limit as positive integer
+        $limit = max(1, absint($limit)) ?: 5;
+
         $query = $this->db->prepare(
             "SELECT subject,
 			COUNT(DISTINCT id) AS emails_sent
@@ -522,10 +973,11 @@ class Logger extends Model
 			AND status = %s
 			GROUP BY subject
 			ORDER BY emails_sent DESC
-			LIMIT {$limit}",
+			LIMIT %d",
             $statDate,
             $endDate,
-            $status
+            $status,
+            $limit
         );
 
         return $this->db->get_results($query, ARRAY_A);

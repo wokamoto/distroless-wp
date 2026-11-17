@@ -9,8 +9,7 @@ $app->post('/settings/validate', 'SettingsController@validate');
 $app->post('/settings', 'SettingsController@store');
 $app->post('/misc-settings', 'SettingsController@storeMiscSettings');
 $app->post('/settings/delete', 'SettingsController@delete');
-$app->post('/settings/misc', 'SettingsController@storeGlobals');
-$app->post('/settings/test', 'SettingsController@sendTestEmil');
+$app->post('/settings/test', 'SettingsController@sendTestEmail');
 $app->post('/settings/subscribe', 'SettingsController@subscribe');
 $app->post('/settings/subscribe-dismiss', 'SettingsController@subscribeDismiss');
 $app->get('settings/connection_info', 'SettingsController@getConnectionInfo');
@@ -59,6 +58,7 @@ $app->post('settings/pushover/disconnect', 'PushoverController@disconnect');
 
 $app->get('/logs', 'LoggerController@get');
 $app->get('/logs/show', 'LoggerController@show');
+$app->get('/logs/attachment-status', 'LoggerController@attachmentStatus');
 $app->post('/logs/retry', 'LoggerController@retry');
 $app->post('/logs/retry-bulk', 'LoggerController@retryBulk');
 $app->post('/logs/delete', 'LoggerController@delete');
