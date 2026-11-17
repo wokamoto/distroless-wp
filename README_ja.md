@@ -84,6 +84,26 @@
 - `make` のビルドは `--pull` でベースイメージを取得し直します。ローカルのキャッシュだけで済ませる場合は `PULL=` を指定します（例: `make build-local PULL=`）。
 - 補足: `WP_VERSION=latest` のまま `docker compose up -d --build` を直接実行した場合は、引き続き `wordpress:php8.x-fpm-alpine` イメージから WordPress をコピーします。最新のマイナーリリースを入れる場合は `make` を使用してください。
 
+### イメージを push
+- `-local` のイメージは Docker Hub に、`-fargate` のイメージは Amazon ECR に push します。
+- 1つのリポジトリに、ローカルと同じタグで push します。
+- 先に `make build-local` / `make build-fargate` でイメージをビルドしてください。対象イメージが1つでもローカルにない場合は、何も push せずに停止します。
+- `PHP_VERSIONS` / `WEBSERVERS` で、ビルドと同じように push 対象を絞り込めます。
+- push のたびにタグを上書きします（ECR リポジトリはタグの上書きを許可する設定（mutable）にしてください）。
+
+Docker Hub（`-local` のイメージ）:
+- `DOCKERHUB_NAMESPACE` に push できるアカウントでログインします: `docker login`
+- push: `make push-local`
+- 例: `distroless-wp:wordpress-php84-local` → `dockerhubcolsis/distroless-wp:wordpress-php84-local`
+- push 先は `DOCKERHUB_NAMESPACE=...` / `DOCKERHUB_REPOSITORY=...` で変更できます（既定: `dockerhubcolsis` / `distroless-wp`）。
+
+Amazon ECR（`-fargate` のイメージ）:
+- 前提: ECR へ push できる認証情報を設定した AWS CLI と、作成済みの ECR リポジトリが必要です（例: `aws ecr create-repository --repository-name distroless-wp`）。
+- ログイン: `make ecr-login ECR_REGISTRY=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com`
+- push: `make push-fargate ECR_REGISTRY=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com`
+- 例: `distroless-wp:wordpress-php84-fargate` → `<ECR_REGISTRY>/distroless-wp:wordpress-php84-fargate`
+- リポジトリ名は `ECR_REPOSITORY=...` で変更できます（既定: `distroless-wp`）。`AWS_REGION` は `ECR_REGISTRY` から自動で取り出し、指定して上書きすることもできます。
+
 ### WP-CLI 実行手順（Docker Compose 経由）
 - コマンド形式: `docker compose exec wp-cli wp <command>`
 - 実行例:

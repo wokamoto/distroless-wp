@@ -141,6 +141,9 @@ served via the `/assets/includes/` rewrite.
 | `make build-fargate PHP_VERSIONS="php84" WEBSERVERS="nginx"` | Build only selected variants |
 | `make build-local WP_VERSION=7.1.4` | Pin WordPress (default: `.env` WP_VERSION, else latest resolved via api.wordpress.org) |
 | `make build-local PULL=` | Build without `--pull` (default refreshes base images) |
+| `make ecr-login ECR_REGISTRY=<acct>.dkr.ecr.<region>.amazonaws.com` | `docker login` to ECR via `aws ecr get-login-password` |
+| `make push-fargate ECR_REGISTRY=...` | Tag built `-fargate` images as `$ECR_REGISTRY/$ECR_REPOSITORY:<local tag>` and push (fails before pushing if any image is missing) |
+| `make push-local` | Same for `-local` images to Docker Hub `dockerhubcolsis/distroless-wp:<local tag>` (`docker login` first; override `DOCKERHUB_NAMESPACE` / `DOCKERHUB_REPOSITORY`) |
 | `docker compose exec wp-cli wp <command>` | Run WP-CLI |
 | Lint / Format | **None configured** 🔵 (no hadolint, shellcheck, phpcs) |
 

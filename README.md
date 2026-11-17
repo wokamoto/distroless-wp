@@ -84,6 +84,26 @@ Database access:
 - `make` builds run with `--pull` to refresh base images. To use only locally cached base images, pass `PULL=` (e.g. `make build-local PULL=`).
 - Note: plain `docker compose up -d --build` with `WP_VERSION=latest` still copies WordPress from the `wordpress:php8.x-fpm-alpine` image; use `make` to get the newest point release.
 
+### Push Images
+- `-local` images go to Docker Hub, `-fargate` images go to Amazon ECR.
+- Images are pushed to one repository with the same tags as the local images.
+- Build the images first (`make build-local` / `make build-fargate`). If any target image is missing locally, the push stops before pushing anything.
+- `PHP_VERSIONS` / `WEBSERVERS` narrow the pushed variants in the same way as the build targets.
+- Tags are overwritten on every push (the ECR repository must allow mutable tags).
+
+Docker Hub (`-local` images):
+- Log in with an account that can push to the `DOCKERHUB_NAMESPACE` namespace: `docker login`
+- Push: `make push-local`
+- Example: `distroless-wp:wordpress-php84-local` → `dockerhubcolsis/distroless-wp:wordpress-php84-local`
+- Override the destination with `DOCKERHUB_NAMESPACE=...` / `DOCKERHUB_REPOSITORY=...` (defaults: `dockerhubcolsis` / `distroless-wp`).
+
+Amazon ECR (`-fargate` images):
+- Prerequisites: AWS CLI with credentials that can push to ECR, and an existing ECR repository (e.g. `aws ecr create-repository --repository-name distroless-wp`).
+- Log in: `make ecr-login ECR_REGISTRY=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com`
+- Push: `make push-fargate ECR_REGISTRY=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com`
+- Example: `distroless-wp:wordpress-php84-fargate` → `<ECR_REGISTRY>/distroless-wp:wordpress-php84-fargate`
+- Change the repository name with `ECR_REPOSITORY=...` (default: `distroless-wp`). `AWS_REGION` is taken from `ECR_REGISTRY` and can be overridden.
+
 ### Run WP-CLI (via Docker Compose)
 - Command format: `docker compose exec wp-cli wp <command>`
 - Examples:
