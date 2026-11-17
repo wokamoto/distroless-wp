@@ -80,6 +80,9 @@
 - `build-*` は次のアプリイメージをビルドします: `php83`, `php84`, `php85`, `nginx`, `httpd`, `wp-cli`
 - 対象バリアントを絞る場合: `make build-fargate PHP_VERSIONS="php84" WEBSERVERS="nginx"`
 - 接尾辞を上書きする場合: `make build-fargate IMAGE_TAG_SUFFIX_FARGATE=-ecs`
+- `make` のビルドでは、`WP_VERSION=latest` を WordPress.org API で最新のバージョン番号（例: `7.1.4`）に解決し、そのバージョンを wordpress.org から取得します。`wordpress:php8.x-fpm-alpine` イメージはマイナーリリースへの追従が遅れることがあるためです。優先順位は `make ... WP_VERSION=x.y.z` > `.env` の `WP_VERSION` > latest です。
+- `make` のビルドは `--pull` でベースイメージを取得し直します。ローカルのキャッシュだけで済ませる場合は `PULL=` を指定します（例: `make build-local PULL=`）。
+- 補足: `WP_VERSION=latest` のまま `docker compose up -d --build` を直接実行した場合は、引き続き `wordpress:php8.x-fpm-alpine` イメージから WordPress をコピーします。最新のマイナーリリースを入れる場合は `make` を使用してください。
 
 ### WP-CLI 実行手順（Docker Compose 経由）
 - コマンド形式: `docker compose exec wp-cli wp <command>`

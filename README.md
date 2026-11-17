@@ -80,6 +80,9 @@ Database access:
 - `build-*` targets build these app images: `php83`, `php84`, `php85`, `nginx`, `httpd`, `wp-cli`
 - To limit variants: `make build-fargate PHP_VERSIONS="php84" WEBSERVERS="nginx"`
 - To override suffixes: `make build-fargate IMAGE_TAG_SUFFIX_FARGATE=-ecs`
+- `make` builds resolve `WP_VERSION=latest` to the newest release number via the WordPress.org API (e.g. `7.1.4`) and download that version from wordpress.org, because the `wordpress:php8.x-fpm-alpine` image can lag behind point releases. Precedence: `make ... WP_VERSION=x.y.z` > `WP_VERSION` in `.env` > latest.
+- `make` builds run with `--pull` to refresh base images. To use only locally cached base images, pass `PULL=` (e.g. `make build-local PULL=`).
+- Note: plain `docker compose up -d --build` with `WP_VERSION=latest` still copies WordPress from the `wordpress:php8.x-fpm-alpine` image; use `make` to get the newest point release.
 
 ### Run WP-CLI (via Docker Compose)
 - Command format: `docker compose exec wp-cli wp <command>`
