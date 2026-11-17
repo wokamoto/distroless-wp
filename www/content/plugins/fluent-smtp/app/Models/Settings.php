@@ -3,6 +3,7 @@
 namespace FluentMail\App\Models;
 
 use FluentMail\Includes\Support\Arr;
+use FluentMail\App\Services\ConnectionHealth;
 use FluentMail\App\Services\Mailer\Manager;
 use FluentMail\App\Models\Traits\SendTestEmailTrait;
 
@@ -47,15 +48,28 @@ class Settings
 
         $extraMappings = $inputs['valid_senders'];
 
-        foreach ($extraMappings as $emailIndex => $email) {
-            if (in_array($email, $primaryEmails)) {
+        // Addresses match ignoring case (see findMappingKey()), so an additional
+        // sender that is another connection's primary in different case is
+        // dropped too; two mappings differing only in case would route by
+        // whichever came first.
+        $primaryEmailsLower = array_map('strtolower', array_map('strval', $primaryEmails));
+        foreach ($extraMappings as $emailIndex => $extraEmail) {
+            if (in_array(strtolower((string)$extraEmail), $primaryEmailsLower, true)) {
                 unset($extraMappings[$emailIndex]);
             }
         }
 
         $extraMappings[] = $email;
-        $extraMappings = array_unique($extraMappings);
-        $extraMappings = array_fill_keys($extraMappings, $uniqueKey);
+
+        // Keep the first spelling of each address.
+        $uniqueSenders = [];
+        foreach ($extraMappings as $extraEmail) {
+            $lower = strtolower((string)$extraEmail);
+            if (!isset($uniqueSenders[$lower])) {
+                $uniqueSenders[$lower] = $extraEmail;
+            }
+        }
+        $extraMappings = array_fill_keys(array_values($uniqueSenders), $uniqueKey);
 
         $mappings = array_merge($mappings, $extraMappings);
 
@@ -82,21 +96,25 @@ class Settings
 
         $misc = $this->getMisc();
 
-        if (!$misc) {
-            $misc = [
-                'log_emails'              => 'yes',
-                'log_saved_interval_days' => '14',
-                'disable_fluentcrm_logs'  => 'no',
-                'default_connection'      => ''
-            ];
-        }
-
         if (empty($misc['default_connection']) || $misc['default_connection'] == $key) {
             $misc['default_connection'] = $uniqueKey;
             $settings['misc'] = $misc;
         }
 
         fluentMailSetSettings($settings);
+
+        /*
+         * The connection was validated just before this save, so the last daily
+         * result says nothing about it any more. Leaving an old error in place
+         * keeps the badge red until the next run. The key changes with the
+         * sender email, so the row under the old key goes too.
+         */
+        $health = new ConnectionHealth();
+        $health->forget($key);
+
+        if ($uniqueKey !== $key) {
+            $health->forget($uniqueKey);
+        }
 
         return $settings;
     }
@@ -141,6 +159,8 @@ class Settings
         }
 
         fluentMailSetSettings($settings);
+
+        (new ConnectionHealth())->forget($key);
 
         return $settings;
     }
@@ -189,26 +209,75 @@ class Settings
         return Arr::get($settings, 'mappings', []);
     }
 
+    /**
+     * The misc settings, filled out with the defaults for anything never saved.
+     *
+     * Responses carrying this are installed straight into the app's `settings.misc`,
+     * where the General Settings form binds a control to each key. A key that is
+     * missing - or stored as null by an older release - reaches a switch as undefined
+     * and Element Plus refuses to render it, so the shape has to be complete here
+     * rather than patched up in the screen that happens to read it.
+     *
+     * @param array|null $settings
+     * @return array
+     */
     public function getMisc($settings = null)
     {
         $settings = $settings ?: $this->getSettings();
 
-        return Arr::get($settings, 'misc', []);
+        $stored = array_filter(Arr::get($settings, 'misc', []), function ($value) {
+            return !is_null($value);
+        });
+
+        $defaults = fluentMail(Manager::class)->getConfig('misc', []);
+
+        return array_merge($defaults, $stored);
     }
 
     public function getConnection($email)
     {
         $settings = $this->getSettings();
-        $mappings = $this->getMappings($settings);
         $connections = $this->getConnections($settings);
+        $key = static::findMappingKey($this->getMappings($settings), $email);
 
-        if (isset($mappings[$email])) {
-            if (isset($connections[$mappings[$email]])) {
-                return $connections[$mappings[$email]];
-            }
+        if ($key && isset($connections[$key])) {
+            return $connections[$key];
         }
 
         return [];
+    }
+
+    /**
+     * The connection key an address is mapped to, or null.
+     *
+     * Mappings are keyed by the address exactly as it was saved, but the local
+     * part and domain a plugin hands wp_mail() may differ from it in case
+     * (`Support@example.com`). Missing the mapping is not harmless: the mail
+     * goes out through the default connection and, when that forces its sender,
+     * from the wrong address. The exact key wins; otherwise the first mapping
+     * that matches ignoring case.
+     *
+     * @param array $mappings
+     * @param string $email
+     * @return string|null
+     */
+    public static function findMappingKey($mappings, $email)
+    {
+        if (!$mappings || !is_string($email) || $email === '') {
+            return null;
+        }
+
+        if (isset($mappings[$email])) {
+            return $mappings[$email];
+        }
+
+        foreach ($mappings as $mappedEmail => $key) {
+            if (strcasecmp((string)$mappedEmail, $email) === 0) {
+                return $key;
+            }
+        }
+
+        return null;
     }
 
     public function updateMiscSettings($misc)
@@ -218,12 +287,33 @@ class Settings
         $this->saveGlobalSettings($settings);
     }
 
+    /**
+     * Update an existing connection in place.
+     *
+     * Every caller is a token-refresh path persisting a renewed OAuth token,
+     * so an absent key means the connection was deleted - either while the
+     * refresh was in flight, or before a scheduled renewal fired. Writing it
+     * back used to recreate it, which resurrected a connection the admin had
+     * removed and left it to be checked, reported on, and routed to. Nothing
+     * here is allowed to create a connection.
+     *
+     * @param string $fromEmail
+     * @param array $connection
+     * @return bool whether the connection existed and was updated
+     */
     public function updateConnection($fromEmail, $connection)
     {
         $key = $this->generateUniqueKey($fromEmail);
         $settings = $this->getSettings();
+
+        if (!isset($settings['connections'][$key])) {
+            return false;
+        }
+
         $settings['connections'][$key]['provider_settings'] = $connection;
         $this->saveGlobalSettings($settings);
+
+        return true;
     }
 
     public function notificationSettings()

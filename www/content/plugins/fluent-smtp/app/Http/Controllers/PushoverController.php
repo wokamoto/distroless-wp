@@ -17,13 +17,13 @@ class PushoverController extends Controller
 
         if (empty($formData['api_token'])) {
             return $this->sendError([
-                'message' => __('API Token is required', 'fluent-smtp')
+                'message' => __('An API token is required.', 'fluent-smtp')
             ], 422);
         }
 
         if (empty($formData['user_key'])) {
             return $this->sendError([
-                'message' => __('User Key is required', 'fluent-smtp')
+                'message' => __('A user key is required.', 'fluent-smtp')
             ], 422);
         }
 
@@ -34,17 +34,19 @@ class PushoverController extends Controller
         ]);
 
         return $this->sendSuccess([
-            'message' => __('Your settings has been saved', 'fluent-smtp'),
+            'message' => __('Settings saved.', 'fluent-smtp'),
         ]);
     }
 
     public function sendTestMessage(Request $request)
     {
+        $this->verify();
+
         $settings = (new Settings())->notificationSettings();
 
         if (Arr::get($settings, 'pushover.status') != 'yes') {
             return $this->sendError([
-                'message' => __('Pushover notification is not enabled', 'fluent-smtp')
+                'message' => __('Pushover notifications are not enabled.', 'fluent-smtp')
             ], 422);
         }
 
@@ -61,13 +63,15 @@ class PushoverController extends Controller
         }
 
         return $this->sendSuccess([
-            'message'         => __('Test message sent successfully', 'fluent-smtp'),
+            'message'         => __('Test message sent.', 'fluent-smtp'),
             'server_response' => $result
         ]);
     }
 
     public function disconnect()
     {
+        $this->verify();
+
         NotificationHelper::updateChannelSettings('pushover', [
             'status'    => 'no',
             'api_token' => '',
@@ -75,7 +79,7 @@ class PushoverController extends Controller
         ]);
 
         return $this->sendSuccess([
-            'message' => __('Pushover connection has been disconnected successfully', 'fluent-smtp')
+            'message' => __('Pushover has been disconnected.', 'fluent-smtp')
         ]);
     }
 }

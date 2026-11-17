@@ -23,7 +23,7 @@ class Handler extends BaseHandler
             return $this->postSend();
         }
 
-        return $this->handleResponse(new \WP_Error(422, __('Something went wrong!', 'fluent-smtp'), []) );
+        return $this->handleResponse(new \WP_Error(422, __('Something went wrong.', 'fluent-smtp'), []) );
     }
 
     public function postSend()
@@ -44,12 +44,25 @@ class Handler extends BaseHandler
             'bcc' => $this->getBlindCarbonCopy()
         ];
 
+        if ($this->getParam('headers.content-type') == 'text/plain') {
+            $body['content']['text'] = $this->phpMailer->Body;
+            unset($body['content']['html']);
+        }
+
         if ($replyTo = $this->getReplyTo()) {
             $body['content']['reply_to'] = $replyTo;
         }
 
         if (!empty($this->getParam('attachments'))) {
-            $body['content']['attachments'] = $this->getAttachments();
+            if ($attachments = $this->getAttachments()) {
+                $body['content']['attachments'] = $attachments;
+            }
+
+            // SparkPost puts an inline image's name in its Content-ID header,
+            // so embedded images go in inline_images under their cid.
+            if ($inlineImages = $this->attachmentRows(true)) {
+                $body['content']['inline_images'] = $inlineImages;
+            }
         }
 
         $params = [
@@ -99,7 +112,7 @@ class Handler extends BaseHandler
         $email = $this->getParam('sender_email');
 
         if ($name = $this->getParam('sender_name')) {
-            $from = $name . ' <' . $email . '>';
+            $from = self::formatAddress($email, $name);
         } else {
             $from = $email;
         }
@@ -127,7 +140,9 @@ class Handler extends BaseHandler
         if ($replyTo = $this->getParam('headers.reply-to')) {
             $replyTo = reset($replyTo);
         
-            return $replyTo['email'];
+            return isset($replyTo['name'])
+                ? self::formatQuotedAddress($replyTo['email'], $replyTo['name'])
+                : $replyTo['email'];
         }
     }
 
@@ -161,32 +176,46 @@ class Handler extends BaseHandler
         return $address;
     }
 
+    /**
+     * The normal attachments; embedded images are sent separately (attachmentRows(true)).
+     *
+     * @return array
+     */
     protected function getAttachments()
+    {
+        return $this->attachmentRows(false);
+    }
+
+    /**
+     * @param bool $inline True for the embedded images, false for normal attachments.
+     * @return array
+     */
+    protected function attachmentRows($inline)
     {
         $data = [];
 
-        foreach ($this->getParam('attachments') as $attachment) {
-            $file = false;
+        $attachments = $this->getParam('attachments');
+        $contentIds = self::inlineContentIds($attachments);
 
-            try {
-                if (is_file($attachment[0]) && is_readable($attachment[0])) {
-                    $fileName = basename($attachment[0]);
-                    $file = file_get_contents($attachment[0]);
-                    $mimeType = mime_content_type($attachment[0]);
-                    $filetype = str_replace(';', '', trim($mimeType));
-                }
-            } catch (\Exception $e) {
-                $file = false;
-            }
+        foreach ($attachments as $key => $attachment) {
+            $contentId = $contentIds[$key];
 
-            if ($file === false) {
+            if (($contentId !== '') !== $inline) {
                 continue;
             }
 
+            try {
+                $file = self::attachmentContent($attachment);
+            } catch (\Exception $e) {
+                $this->logAttachmentFailure('SparkPost', $e);
+                continue;
+            }
+
+            // SparkPost's attachment object is name, type and data (all required).
             $data[] = [
-                'name' => $fileName,
-                'type' => $filetype,
-                'content' => base64_encode($file)
+                'name' => $inline ? $contentId : self::attachmentName($attachment),
+                'type' => self::attachmentType($attachment),
+                'data' => base64_encode($file)
             ];
         }
 

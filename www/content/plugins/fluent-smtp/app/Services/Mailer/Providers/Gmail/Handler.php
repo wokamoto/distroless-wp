@@ -15,7 +15,7 @@ class Handler extends BaseHandler
             return $this->postSend();
         }
 
-        return $this->handleResponse(new \WP_Error(422, __('Something went wrong!', 'fluent-smtp'), []));
+        return $this->handleResponse(new \WP_Error(422, __('Something went wrong.', 'fluent-smtp'), []));
     }
 
     protected function postSend()
@@ -49,7 +49,9 @@ class Handler extends BaseHandler
             require_once FLUENTMAIL_PLUGIN_PATH . 'includes/libs/google-api-client/build/vendor/autoload.php';
         }
 
-        $message = $this->phpMailer->getSentMIMEMessage();
+        $message = $this->normalizeListHeaders(
+            $this->phpMailer->getSentMIMEMessage()
+        );
 
         $data = $this->getSetting();
 
@@ -118,7 +120,7 @@ class Handler extends BaseHandler
             }
 
             if (!$clientSecret) {
-                $errors['client_secret']['required'] = __('Application Client Secret key is required.', 'fluent-smtp');
+                $errors['client_secret']['required'] = __('Application Client Secret is required.', 'fluent-smtp');
             }
         } else if ($keyStoreType == 'wp_config') {
             if (!defined('FLUENTMAIL_GMAIL_CLIENT_ID') || !FLUENTMAIL_GMAIL_CLIENT_ID) {
@@ -174,7 +176,7 @@ class Handler extends BaseHandler
                 }, 10, 2);
             }
         } else if (!$authToken && !$accessToken) {
-            $errors['auth_token']['required'] = __('Please Provide Auth Token.', 'fluent-smtp');
+            $errors['auth_token']['required'] = __('Please provide an auth token.', 'fluent-smtp');
         }
 
         if ($errors) {
@@ -211,7 +213,7 @@ class Handler extends BaseHandler
         $body = json_decode(wp_remote_retrieve_body($request), true);
 
         if (!empty($body['error'])) {
-            $error = 'Unknown Error';
+            $error = __('Unknown Error', 'fluent-smtp');
             if (isset($body['error_description'])) {
                 $error = $body['error_description'];
             } else if (!empty($body['error']['message'])) {
@@ -258,7 +260,7 @@ class Handler extends BaseHandler
         $client = new \FluentSmtpLib\Google\Client();
         $client->setClientId($data['client_id']);
         $client->setClientSecret($data['client_secret']);
-        $client->addScope("https://www.googleapis.com/auth/gmail.compose");
+        $client->addScope("https://www.googleapis.com/auth/gmail.send");
         $client->setAccessType('offline');
         $client->setApprovalPrompt('force');
 
@@ -279,7 +281,7 @@ class Handler extends BaseHandler
             if (!$result) {
                 $errorDescription = Arr::get($newTokens, 'error_description');
                 if (!$errorDescription) {
-                    $errorDescription = __('Failed to renew token with Gmail Api', 'fluent-smtp');
+                    $errorDescription = __('Could not renew the token with the Gmail API.', 'fluent-smtp');
                 }
 
                 return new \WP_Error('api_error', $errorDescription);
@@ -304,10 +306,26 @@ class Handler extends BaseHandler
             require_once FLUENTMAIL_PLUGIN_PATH . 'includes/libs/google-api-client/build/vendor/autoload.php';
         }
 
-        $client = $this->getApiClient($connection);
+        $tokenError = '';
 
-        if (is_wp_error($client)) {
-            return '<p style="color: red; text-align: center; font-size: 18px;">ERROR: ' . $connection->get_error_message() . '</p>';
+        try {
+            $client = $this->getApiClient($connection);
+
+            /*
+             * This read `$connection->get_error_message()` - a method call on
+             * the array parameter, which is a fatal Error rather than a
+             * catchable Exception. It fired exactly when someone opened this
+             * panel to find out why their Gmail connection had stopped
+             * working, so the one screen that could explain the failure was
+             * the one screen guaranteed to die on it.
+             */
+            if (is_wp_error($client)) {
+                $tokenError = $client->get_error_message();
+            }
+        } catch (\Exception $e) {
+            // The Google client throws on a rejected grant rather than
+            // returning an error, and nothing upstream catches it here.
+            $tokenError = $e->getMessage();
         }
 
         $info = fluentMailgetConnection($connection['sender_email']);
@@ -316,11 +334,17 @@ class Handler extends BaseHandler
 
         $extraRow = [
             'title'   => __('Token Validity', 'fluent-smtp'),
-            'content' => 'Valid (' . (int)(($connection['expire_stamp'] - time()) / 60) . 'minutes)'
+            'content' => sprintf(
+                /* translators: %s: number of minutes until the access token expires */
+                __('Valid (%s minutes)', 'fluent-smtp'),
+                number_format_i18n((int)((Arr::get($connection, 'expire_stamp') - time()) / 60))
+            )
         ];
 
-        if (($connection['expire_stamp']) < time()) {
-            $extraRow['content'] = __('Invalid. Please re-authenticate', 'fluent-smtp');
+        if ($tokenError) {
+            $extraRow['content'] = $tokenError;
+        } elseif (Arr::get($connection, 'expire_stamp') < time()) {
+            $extraRow['content'] = __('Invalid. Please authenticate again.', 'fluent-smtp');
         }
 
         $connection['extra_rows'] = [$extraRow];

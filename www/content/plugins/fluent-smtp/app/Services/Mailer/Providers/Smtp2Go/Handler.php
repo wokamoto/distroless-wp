@@ -16,12 +16,24 @@ class Handler extends BaseHandler {
 
     protected $url = 'https://api.smtp2go.com/v3/email/send';
 
+    /*
+     * api.smtp2go.com resolves to SMTP2GO's nodes on every continent, so a sender
+     * in Europe regularly lands on a US or AU node. The regional hosts pin requests
+     * to one region and accept the same API keys.
+     */
+    protected $regionHosts = [
+        'global' => 'api.smtp2go.com',
+        'eu'     => 'eu-api.smtp2go.com',
+        'us'     => 'us-api.smtp2go.com',
+        'au'     => 'au-api.smtp2go.com',
+    ];
+
     public function send() {
         if ($this->preSend()) {
             return $this->postSend();
         }
 
-        return $this->handleResponse(new \WP_Error(422, __('Something went wrong!', 'fluent-smtp'), []));
+        return $this->handleResponse(new \WP_Error(422, __('Something went wrong.', 'fluent-smtp'), []));
     }
 
     public function postSend() {
@@ -32,7 +44,13 @@ class Handler extends BaseHandler {
             'bcc'       => $this->getBlindCarbonCopy(),
             'subject'   => $this->getSubject(),
             'html_body' => $this->getBody(),
-            'text_body' => $this->phpMailer->AltBody
+            'text_body' => $this->phpMailer->AltBody,
+            /*
+             * Without fastaccept SMTP2GO holds the request open until the email is
+             * sent, which can outlast the HTTP timeout: the email is delivered but
+             * logged as failed. With it the email is queued and accepted at once.
+             */
+            'fastaccept' => (bool) apply_filters('fluentsmtp_smtp2go_fastaccept', true)
         ];
 
         if ($replyTo = $this->getReplyTo()) {
@@ -44,7 +62,15 @@ class Handler extends BaseHandler {
 
 
         if (!empty($this->getParam('attachments'))) {
-            $body['attachments'] = $this->getAttachments();
+            if ($attachments = $this->getAttachments()) {
+                $body['attachments'] = $attachments;
+            }
+
+            // SMTP2GO uses an inline image's filename as its cid, so embedded
+            // images go in "inlines" under their cid.
+            if ($inlines = $this->attachmentRows(true)) {
+                $body['inlines'] = $inlines;
+            }
         }
 
         $params = [
@@ -54,7 +80,7 @@ class Handler extends BaseHandler {
 
         $params = array_merge($params, $this->getDefaultParams());
 
-        $response = wp_safe_remote_post($this->url, $params);
+        $response = wp_safe_remote_post($this->getApiUrl(), $params);
 
         if (is_wp_error($response)) {
             $returnResponse = new \WP_Error($response->get_error_code(), $response->get_error_message(), $response->get_error_messages());
@@ -70,7 +96,7 @@ class Handler extends BaseHandler {
                     'succeeded' => Arr::get($responseBody, 'data.succeeded'),
                 ];
             } else {
-                $returnResponse = new \WP_Error($responseCode, Arr::get($responseBody, 'data.error', 'Unknown Error'), $responseBody);
+                $returnResponse = new \WP_Error($responseCode, Arr::get($responseBody, 'data.error', __('Unknown Error', 'fluent-smtp')), $responseBody);
             }
         }
 
@@ -79,11 +105,21 @@ class Handler extends BaseHandler {
         return $this->handleResponse($this->response);
     }
 
+    protected function getApiUrl() {
+        $region = $this->getSetting('region');
+
+        $url = isset($this->regionHosts[$region])
+            ? 'https://' . $this->regionHosts[$region] . '/v3/email/send'
+            : $this->url;
+
+        return apply_filters('fluentsmtp_smtp2go_api_url', $url, $region);
+    }
+
     protected function getFrom() {
         $from = $this->getParam('sender_email');
 
         if ($name = $this->getParam('sender_name')) {
-            $from = $name . ' <' . $from . '>';
+            $from = self::formatAddress($from, $name);
         }
 
         return $from;
@@ -93,14 +129,16 @@ class Handler extends BaseHandler {
         if ($replyTo = $this->getParam('headers.reply-to')) {
             $replyTo = reset($replyTo);
 
-            return $replyTo['email'];
+            return isset($replyTo['name'])
+                ? self::formatQuotedAddress($replyTo['email'], $replyTo['name'])
+                : $replyTo['email'];
         }
     }
 
     protected function getRecipients($recipients) {
         return array_map(function ($recipient) {
             return isset($recipient['name'])
-                ? $recipient['name'] . ' <' . $recipient['email'] . '>'
+                ? self::formatAddress($recipient['email'], $recipient['name'])
                 : $recipient['email'];
         }, $recipients);
     }
@@ -121,30 +159,42 @@ class Handler extends BaseHandler {
         return $this->getParam('message');
     }
 
+    /**
+     * The normal attachments; embedded images are sent separately (attachmentRows(true)).
+     *
+     * @return array
+     */
     protected function getAttachments() {
+        return $this->attachmentRows(false);
+    }
+
+    /**
+     * @param bool $inline True for the embedded images, false for normal attachments.
+     * @return array
+     */
+    protected function attachmentRows($inline) {
         $data = [];
 
-        foreach ($this->getParam('attachments') as $attachment) {
-            $file = false;
+        $attachments = $this->getParam('attachments');
+        $contentIds = self::inlineContentIds($attachments);
 
-            try {
-                if (is_file($attachment[0]) && is_readable($attachment[0])) {
-                    $fileName = basename($attachment[0]);
-                    $file     = file_get_contents($attachment[0]);
-                    $mimeType = mime_content_type($attachment[0]);
-                    $filetype = str_replace(';', '', trim($mimeType));
-                }
-            } catch (\Exception $e) {
-                $file = false;
+        foreach ($attachments as $key => $attachment) {
+            $contentId = $contentIds[$key];
+
+            if (($contentId !== '') !== $inline) {
+                continue;
             }
 
-            if ($file === false) {
+            try {
+                $file = self::attachmentContent($attachment);
+            } catch (\Exception $e) {
+                $this->logAttachmentFailure('Smtp2Go', $e);
                 continue;
             }
 
             $data[] = [
-                'mimetype' => $filetype,
-                'filename' => $fileName,
+                'mimetype' => self::attachmentType($attachment),
+                'filename' => $inline ? $contentId : self::attachmentName($attachment),
                 'fileblob' => base64_encode($file)
             ];
         }

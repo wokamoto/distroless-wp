@@ -130,7 +130,13 @@ class SimpleEmailServiceRequest
 		curl_setopt($curl, CURLOPT_HEADER, false);
 		curl_setopt($curl, CURLOPT_RETURNTRANSFER, false);
 		curl_setopt($curl, CURLOPT_WRITEFUNCTION, array(&$this, '__responseWriteCallback'));
-		curl_setopt($curl, CURLOPT_FOLLOWLOCATION, true);
+		curl_setopt($curl, CURLOPT_FOLLOWLOCATION, false);
+
+		// Bounded timeouts: this handle previously had NONE, so a single hung
+		// request could stall the whole sending pipeline indefinitely (WP-CLI
+		// runs have no execution limit). Overridable via self::$curlOptions.
+		curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 10);
+		curl_setopt($curl, CURLOPT_TIMEOUT, 30);
 
 		foreach(self::$curlOptions as $option => $value) {
 			curl_setopt($curl, $option, $value);
@@ -148,11 +154,27 @@ class SimpleEmailServiceRequest
 	*/
 	public function getResponse() {
 
+        if (!SimpleEmailService::isValidHost($this->ses->getHost())) {
+            $this->parameters = array();
+            $this->response = (object) array('body' => '', 'code' => 0, 'error' => false);
+
+            return (object) array('body' => '', 'code' => 422, 'error' => array(
+                'Error' => array(
+                    'Type' => 'Sender',
+                    'Code' => 'InvalidRegion',
+                    'Message' => __('Please select a valid Amazon SES region.', 'fluent-smtp')
+                ),
+                'RequestId' => ''
+            ));
+        }
+
         $url = 'https://'.$this->ses->getHost().'/';
         $query = implode('&', $this->getParametersEncoded());
         $headers = $this->getHeaders($query);
 
 		$curl_handler = $this->getCurlHandler();
+		// Apply after custom options, including when reusing an existing handle.
+		curl_setopt($curl_handler, CURLOPT_FOLLOWLOCATION, false);
 		curl_setopt($curl_handler, CURLOPT_CUSTOMREQUEST, $this->verb);
 
 		// Request types
@@ -171,15 +193,34 @@ class SimpleEmailServiceRequest
 		curl_setopt($curl_handler, CURLOPT_URL, $url);
 
 
-		// Execute, grab errors
-		if (curl_exec($curl_handler)) {
-			$this->response->code = curl_getinfo($curl_handler, CURLINFO_HTTP_CODE);
-		} else {
+		// Execute, grab errors. Connection-phase failures (DNS 6, connect 7,
+		// TLS handshake 35) happen while establishing a FRESH connection, so
+		// the request never reached AWS and ONE retry is always duplicate-safe.
+		// (Stale kept-alive sockets are not this case: curl detects a dead
+		// reused connection and reconnects on its own before sending. If a
+		// reused socket dies mid-transfer instead — errno 52/55/56 — the
+		// request bytes may already have reached AWS, so those are never
+		// retried: a retry could deliver the email twice.)
+		for ($attempt = 0; $attempt < 2; $attempt++) {
+			if ($attempt) {
+				// Discard anything the failed attempt streamed into the body.
+				$this->response = (object) array('body' => '', 'code' => 0, 'error' => false);
+			}
+
+			if (curl_exec($curl_handler)) {
+				$this->response->code = curl_getinfo($curl_handler, CURLINFO_HTTP_CODE);
+				break;
+			}
+
 			$this->response->error = array(
 				'curl' => true,
 				'code' => curl_errno($curl_handler),
 				'message' => curl_error($curl_handler),
 			);
+
+			if (!in_array(curl_errno($curl_handler), array(6, 7, 35), true)) {
+				break;
+			}
 		}
 
 		// cleanup for reusing the current instance for multiple requests
@@ -238,16 +279,14 @@ class SimpleEmailServiceRequest
             $headers[] = 'X-Amzn-Authorization: ' . $auth;
         }
 
+        // Suppress cURL's automatic "Expect: 100-continue": every
+        // SendRawEmail body exceeds cURL's 1KB threshold, and the
+        // wait-for-continue handshake costs one extra round trip to the SES
+        // region PER EMAIL. AWS processes the request identically without it.
+        $headers[] = 'Expect:';
+
         return $headers;
     }
-
-	/**
-	* Destroy any leftover handlers
-	*/
-	public function __destruct() {
-		if (!empty($this->curl_handler))
-			@curl_close($this->curl_handler);
-	}
 
 	/**
 	* CURL write callback

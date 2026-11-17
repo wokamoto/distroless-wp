@@ -20,7 +20,7 @@ class TelegramController extends Controller
 
         if (!is_email($userEmail)) {
             return $this->sendError([
-                'message' => __('Please provide a valid email address', 'fluent-smtp')
+                'message' => __('Please provide a valid email address.', 'fluent-smtp')
             ], 422);
         }
 
@@ -28,7 +28,7 @@ class TelegramController extends Controller
             'admin_email' => $userEmail,
             'smtp_url'    => admin_url('options-general.php?page=fluent-mail#/'),
             'site_url'    => site_url(),
-            'site_title'  => get_bloginfo('name'),
+            'site_title'  => fluentMailSiteTitle(),
             'site_lang'   => get_bloginfo('language'),
         ];
 
@@ -43,7 +43,7 @@ class TelegramController extends Controller
         }
 
         return $this->sendSuccess([
-            'message'    => __('Awesome! Please activate the connection from your telegram account.', 'fluent-smtp'),
+            'message'    => __('Now activate the connection from your Telegram account.', 'fluent-smtp'),
             'site_token' => Arr::get($activationData, 'site_token'),
             'site_pin'   => Arr::get($activationData, 'site_pin'),
         ]);
@@ -57,7 +57,7 @@ class TelegramController extends Controller
 
         if (empty($siteToken)) {
             return $this->sendError([
-                'message' => __('Please provide site token', 'fluent-smtp')
+                'message' => __('Please provide the site token.', 'fluent-smtp')
             ], 422);
         }
 
@@ -78,7 +78,7 @@ class TelegramController extends Controller
 
         return $this->sendSuccess([
             'success' => true,
-            'message' => __('Connection successful', 'fluent-smtp'),
+            'message' => __('Connection successful.', 'fluent-smtp'),
         ]);
     }
 
@@ -90,7 +90,7 @@ class TelegramController extends Controller
 
         if (Arr::get($settings, 'telegram.status') != 'yes') {
             return $this->sendSuccess([
-                'message'                => __('Telegram notification is not enabled', 'fluent-smtp'),
+                'message'                => __('Telegram notifications are not enabled.', 'fluent-smtp'),
                 'telegram_notify_status' => 'no'
             ], 200);
         }
@@ -115,12 +115,14 @@ class TelegramController extends Controller
 
     public function sendTestMessage(Request $request)
     {
+        $this->verify();
+
         // Let's update the notification status
         $settings = (new Settings())->notificationSettings();
 
         if (Arr::get($settings, 'telegram.status') != 'yes') {
             return $this->sendError([
-                'message' => __('Telegram notification is not enabled', 'fluent-smtp')
+                'message' => __('Telegram notifications are not enabled.', 'fluent-smtp')
             ], 422);
         }
 
@@ -134,12 +136,14 @@ class TelegramController extends Controller
         }
 
         return $this->sendSuccess([
-            'message' => __('Test message sent successfully', 'fluent-smtp')
+            'message' => __('Test message sent.', 'fluent-smtp')
         ]);
     }
 
     public function disconnect()
     {
+        $this->verify();
+
         $settings = (new Settings())->notificationSettings();
 
         $token = Arr::get($settings, 'telegram.token');
@@ -155,7 +159,7 @@ class TelegramController extends Controller
         ]);
 
         return $this->sendSuccess([
-            'message' => __('Telegram connection has been disconnected successfully', 'fluent-smtp')
+            'message' => __('Telegram has been disconnected.', 'fluent-smtp')
         ]);
     }
 }

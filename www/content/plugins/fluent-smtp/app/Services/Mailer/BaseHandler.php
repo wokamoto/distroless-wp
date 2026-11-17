@@ -5,6 +5,7 @@ namespace FluentMail\App\Services\Mailer;
 use Exception;
 use InvalidArgumentException;
 use FluentMail\App\Models\Logger;
+use FluentMail\App\Models\Settings;
 use FluentMail\Includes\Support\Arr;
 use FluentMail\Includes\Core\Application;
 use FluentMail\App\Services\Mailer\Manager;
@@ -29,6 +30,48 @@ class BaseHandler
     protected $response = null;
 
     protected $existing_row_id = null;
+
+    protected $sendStartedAt = null;
+
+    protected $sendDurationMs = null;
+
+    /**
+     * Set once this plugin's SMTP provider has pointed the shared PHPMailer
+     * instance at a relay, and cleared again at the start of the next send.
+     *
+     * The instance persists across sends now, so a PHP mail() send that follows
+     * an SMTP one — a fallback, most of all — would otherwise inherit
+     * Mailer='smtp' along with that relay's host and credentials. Only that
+     * carry-over may be undone: a phpmailer_init listener selecting a transport
+     * for the send in progress has to be honored, so the reset is not a blanket
+     * one. @see Providers\DefaultMail\Handler::postSend()
+     *
+     * @var bool
+     */
+    protected static $smtpTransportClaimed = false;
+
+    /**
+     * Record that the SMTP provider has taken over the shared PHPMailer.
+     *
+     * @return void
+     */
+    public static function markSmtpTransportClaimed()
+    {
+        self::$smtpTransportClaimed = true;
+    }
+
+    /**
+     * Forget any earlier claim, because the transport has just been reset.
+     *
+     * Called from the wp_mail() replacement alongside the isMail() reset, which
+     * runs before phpmailer_init, so listeners get the final word again.
+     *
+     * @return void
+     */
+    public static function forgetSmtpTransportClaim()
+    {
+        self::$smtpTransportClaimed = false;
+    }
 
     public function __construct(?Application $app = null, ?Manager $manager = null)
     {
@@ -57,10 +100,33 @@ class BaseHandler
 
     protected function preSend()
     {
+        /*
+         * Every provider calls this first, so it is the one point that marks
+         * the start of a send for all of them. What lands in the log is the
+         * span from here to the provider's answer: assembling the MIME message
+         * and then the round trip itself - connection, the API call or SMTP
+         * conversation, and the response. It is not the time until the mail
+         * reaches an inbox; that part is out of our hands.
+         */
+        $this->sendStartedAt = microtime(true);
+
         $this->attributes = [];
         
         if ($this->isForced('from_name')) {
             $this->phpMailer->FromName = $this->getSetting('sender_name');
+        }
+
+        /*
+         * A display name is plain text — an entity in it has no meaning and
+         * simply shows up as "Tom &amp; Jerry" in the recipient's inbox. Names
+         * arrive escaped whenever they came from the site title, which
+         * WordPress stores that way, whether that was our own sender_name
+         * setting or a theme filtering wp_mail_from_name with the raw option.
+         * Normalize once here, where the handler takes ownership of the
+         * message and before any provider or the log reads the name.
+         */
+        if ($this->phpMailer->FromName) {
+            $this->phpMailer->FromName = wp_specialchars_decode($this->phpMailer->FromName, ENT_QUOTES);
         }
 
         if ($this->getSetting('return_path') == 'yes') {
@@ -80,6 +146,76 @@ class BaseHandler
     public function isForcedEmail()
     {
         return $this->getSetting("force_from_email") != 'no';
+    }
+
+    /**
+     * Whether an address sends as itself through this connection: the
+     * connection's own sender, or one of the additional senders mapped to it
+     * (Amazon SES and toSend verify a whole domain, so one connection can send
+     * as several addresses). Forcing the sender applies to every other address.
+     *
+     * @param string $email
+     * @return bool
+     */
+    public function isOwnSender($email)
+    {
+        $senderEmail = (string)$this->getSetting('sender_email');
+
+        if (!$email || !$senderEmail) {
+            return false;
+        }
+
+        if (strcasecmp($email, $senderEmail) === 0) {
+            return true;
+        }
+
+        $connection = (new Settings)->getConnection($email);
+
+        return strcasecmp((string)Arr::get($connection, 'provider_settings.sender_email'), $senderEmail) === 0;
+    }
+
+    /**
+     * The address this connection sends from.
+     *
+     * Forcing the sender email means: a From that is not one of this
+     * connection's senders goes out as the connection's sender. A listed From
+     * - the primary or an additional sender - is always kept, and with forcing
+     * off so is any other From. The same answer feeds the provider request,
+     * the log, and so a resend from the log.
+     *
+     * @return string
+     */
+    protected function getSenderEmail()
+    {
+        $fromEmail = $this->phpMailer ? $this->phpMailer->From : '';
+
+        if ($fromEmail && ($this->isOwnSender($fromEmail) || $this->allowsAnyFrom())) {
+            return $fromEmail;
+        }
+
+        return $this->getSetting('sender_email');
+    }
+
+    /**
+     * Whether this connection may send any From address it is given.
+     *
+     * Only providers that offer the "force sender email" option (SMTP, SES,
+     * toSend, PHP mail) can turn forcing off. Every other provider always sends
+     * from its own sender, even when a stale `force_from_email = no` is left in
+     * its settings from a provider it was switched from.
+     *
+     * @return bool
+     */
+    protected function allowsAnyFrom()
+    {
+        if ($this->isForcedEmail()) {
+            return false;
+        }
+
+        $providers = (array)fluentMail(Manager::class)->getConfig('providers');
+        $options = (array)Arr::get($providers, $this->getSetting('provider') . '.options', []);
+
+        return array_key_exists('force_from_email', $options);
     }
 
     public function isActive()
@@ -106,7 +242,15 @@ class BaseHandler
             $this->phpMailer->getReplyToAddresses()
         ));
         
-        $contentType = $this->phpMailer->ContentType;
+        /*
+         * Expose the bare MIME type only. PHPMailer's ContentType can carry
+         * parameters — a charset, or the multipart boundary that WP 6.9+ folds
+         * into the Content-Type value instead of emitting a separate header.
+         * Every provider and the logger compare this against bare types such as
+         * 'text/html' and 'multipart/alternative', so a parameterized value would
+         * silently fall through to the plain-text branch.
+         */
+        $contentType = trim(strtok((string)$this->phpMailer->ContentType, ';'));
         
         $customHeaders = $this->setFormattedCustomHeaders();
 
@@ -133,10 +277,164 @@ class BaseHandler
         ]);
     }
 
+    /**
+     * Split a comma-separated address list, keeping a comma that sits inside a
+     * quoted display name: `"Jewel, Shah" <jewel@example.com>` is one mailbox.
+     *
+     * A quote only opens a quoted name at the start of an entry, so a stray
+     * `"` (an inch mark, a comment) never joins two entries. A list without a
+     * double quote, or with an unclosed quoted name, is split on every comma
+     * exactly as wp_mail() does.
+     *
+     * @param string $list
+     * @return array
+     */
+    public static function splitAddressList($list)
+    {
+        $list = (string)$list;
+
+        if (strpos($list, '"') === false) {
+            return explode(',', $list);
+        }
+
+        $parts = [];
+        $current = '';
+        $inQuote = false;
+        $length = strlen($list);
+
+        for ($i = 0; $i < $length; $i++) {
+            $char = $list[$i];
+
+            if ($inQuote) {
+                if ($char === '\\' && $i + 1 < $length) {
+                    $current .= $char . $list[++$i];
+                    continue;
+                }
+                if ($char === '"') {
+                    $inQuote = false;
+                }
+            } elseif ($char === '"' && trim($current) === '') {
+                $inQuote = true;
+            } elseif ($char === ',') {
+                $parts[] = $current;
+                $current = '';
+                continue;
+            }
+
+            $current .= $char;
+        }
+
+        if ($inQuote) {
+            return explode(',', $list);
+        }
+
+        $parts[] = $current;
+
+        return $parts;
+    }
+
+    /**
+     * Strip the quotes from a quoted display name that holds a comma:
+     * `"Jewel, Shah"` → `Jewel, Shah`. PHPMailer quotes it again when it
+     * writes the header.
+     *
+     * Any other name, quoted or not, is returned unchanged.
+     *
+     * @param string $name
+     * @return string
+     */
+    public static function unquoteName($name)
+    {
+        $trimmed = trim((string)$name);
+
+        if (!self::isQuotedString($trimmed) || strpos($trimmed, ',') === false) {
+            return $name;
+        }
+
+        return preg_replace('/\\\\(.)/s', '$1', substr($trimmed, 1, -1));
+    }
+
+    /**
+     * Build `name <email>`, quoting a name that holds a comma so a provider
+     * that takes a comma-separated list reads it as one mailbox.
+     *
+     * A name without a comma, or one that is already quoted, is written
+     * exactly as before.
+     *
+     * @param string $email
+     * @param string $name
+     * @return string
+     */
+    public static function formatAddress($email, $name = '')
+    {
+        $name = (string)$name;
+
+        if ($name === '') {
+            return $email;
+        }
+
+        if (strpos($name, ',') !== false && !self::isQuotedString(trim($name))) {
+            $name = '"' . addcslashes($name, '"\\') . '"';
+        }
+
+        return $name . ' <' . $email . '>';
+    }
+
+    protected static function formatQuotedAddress($email, $name = '')
+    {
+        $name = (string)$name;
+
+        if ($name === '') {
+            return $email;
+        }
+
+        if (preg_match('/[^A-Za-z0-9!#$%&\'*+\/=?^_`{|}~ \x80-\xFF-]/', $name) && !self::isQuotedString(trim($name))) {
+            $name = '"' . addcslashes($name, '"\\') . '"';
+        }
+
+        return $name . ' <' . $email . '>';
+    }
+
+    /**
+     * Whether a value is one RFC 5322 quoted string: `"..."` with every inner
+     * quote escaped.
+     *
+     * @param string $value
+     * @return bool
+     */
+    private static function isQuotedString($value)
+    {
+        if (strlen($value) < 2 || $value[0] !== '"' || substr($value, -1) !== '"') {
+            return false;
+        }
+
+        $inner = preg_replace('/\\\\./s', '', substr($value, 1, -1));
+
+        return strpos($inner, '"') === false && substr($inner, -1) !== '\\';
+    }
+
+    /**
+     * The `from` param for a provider that sends it as one `name <email>`
+     * string. A sender name with a comma is quoted; any other From is the
+     * logged `from` value, unchanged.
+     *
+     * @return string
+     */
+    protected function getFormattedFrom()
+    {
+        $name = (string)$this->getParam('sender_name');
+
+        if (strpos($name, ',') === false) {
+            return $this->getParam('from');
+        }
+
+        return self::formatAddress($this->getParam('sender_email'), $name);
+    }
+
     protected function setFrom()
     {
         $name = $this->getSetting('sender_name');
-        $email = $this->getSetting('sender_email');
+        $email = $this->getSenderEmail();
         $overrideName = $this->getSetting('force_from_name');
 
         if ($name && ($overrideName == 'yes' || $this->phpMailer->FromName == 'WordPress')) {
@@ -206,6 +504,129 @@ class BaseHandler
         return $headers;
     }
 
+    /**
+     * Repair List-Unsubscribe / List-Unsubscribe-Post headers in a raw MIME message.
+     *
+     * PHPMailer RFC-2047-encodes a custom header whose value is longer than it
+     * can fit on one line. Our wp_mail() replacement leaves PHPMailer in mail()
+     * mode, so that limit is MAIL_MAX_LINE_LENGTH (63) minus the encoded-word
+     * overhead — only 47 characters. Every realistic unsubscribe URL is longer
+     * than that and therefore ships encoded.
+     *
+     * Encoded-words are not valid inside structured headers such as
+     * List-Unsubscribe, so Gmail ignores the header entirely when it arrives
+     * encoded, silently breaking RFC 8058 one-click unsubscribe that Gmail and
+     * Yahoo require from bulk senders.
+     *
+     * Providers that hand the fully built message to the API can repair the
+     * headers here: unfold each target header, decode any encoded-words, and
+     * re-emit it as a plain single line (re-folded at a URI boundary only if it
+     * would otherwise exceed the RFC 5322 line limit).
+     *
+     * Any header we cannot rewrite safely is left exactly as PHPMailer built
+     * it — a missing unsubscribe button is a far better outcome than a message
+     * the provider rejects.
+     *
+     * @param string $rawMessage The message from PHPMailer::getSentMIMEMessage()
+     * @return string
+     */
+    protected function normalizeListHeaders($rawMessage)
+    {
+        if (stripos($rawMessage, 'List-Unsubscribe') === false) {
+            return $rawMessage;
+        }
+
+        // Work on the top-level header block only.
+        $breakPos = strpos($rawMessage, "\r\n\r\n");
+
+        if ($breakPos === false) {
+            $breakPos = strpos($rawMessage, "\n\n");
+        }
+
+        if ($breakPos === false) {
+            return $rawMessage;
+        }
+
+        $headerBlock = substr($rawMessage, 0, $breakPos);
+        $rest = substr($rawMessage, $breakPos);
+
+        $lineEnding = (strpos($headerBlock, "\r\n") !== false) ? "\r\n" : "\n";
+
+        $fixedHeaderBlock = preg_replace_callback(
+            '/^(List-Unsubscribe(?:-Post)?)[ \t]*:[ \t]*([^\r\n]*(?:\r?\n[ \t][^\r\n]*)*)/mi',
+            function ($matches) use ($lineEnding) {
+                $name = $matches[1];
+
+                // Unfold continuation lines.
+                $value = preg_replace('/\r?\n[ \t]+/', ' ', $matches[2]);
+
+                // Decode RFC 2047 encoded-words if present.
+                if (strpos($value, '=?') !== false) {
+                    $decoded = false;
+
+                    if (function_exists('iconv_mime_decode')) {
+                        $decoded = @iconv_mime_decode(
+                            $value,
+                            ICONV_MIME_DECODE_CONTINUE_ON_ERROR,
+                            'UTF-8'
+                        );
+                    }
+
+                    if (($decoded === false || $decoded === null) && function_exists('mb_decode_mimeheader')) {
+                        $decoded = mb_decode_mimeheader($value);
+                    }
+
+                    if ($decoded !== false && $decoded !== null && $decoded !== '') {
+                        $value = $decoded;
+                    }
+                }
+
+                $value = preg_replace('/[ \t]+/', ' ', trim($value));
+
+                // Decoding is what makes an encoded-word unnecessary in the
+                // first place, so it must produce a header that is legal
+                // unencoded: printable US-ASCII, no control characters and no
+                // line breaks. A percent-escaped URL always is. Anything else
+                // (an IDN host, a unicode query value, a decode that went
+                // wrong) has to stay encoded or we would emit raw 8-bit bytes
+                // into the header block and risk the provider rejecting the
+                // whole message.
+                if (preg_match('/[^\x20-\x7E]/', $value)) {
+                    return $matches[0];
+                }
+
+                $headerLine = $name . ': ' . $value;
+
+                // RFC 5322 caps a line at 998 characters. Fold at the comma
+                // between URIs, which is a legal fold point.
+                if (strlen($headerLine) > 990) {
+                    $headerLine = $name . ': ' . preg_replace(
+                        '/>,\s*</',
+                        '>,' . $lineEnding . ' <',
+                        $value
+                    );
+                }
+
+                // A single URI longer than the limit has no fold point, so the
+                // rewrite would produce an over-long line. Keep the original.
+                foreach (explode($lineEnding, $headerLine) as $line) {
+                    if (strlen($line) > 998) {
+                        return $matches[0];
+                    }
+                }
+
+                return $headerLine;
+            },
+            $headerBlock
+        );
+
+        if ($fixedHeaderBlock === null) {
+            return $rawMessage; // regex failure — send untouched
+        }
+
+        return $fixedHeaderBlock . $rest;
+    }
+
     public function getSetting($key = null, $default = null)
     {
         try {
@@ -250,11 +671,23 @@ class BaseHandler
     {
         $this->attributes['extra']['provider'] = $this->getSetting('provider');
 
+        if ($this->sendDurationMs !== null) {
+            $this->attributes['extra']['send_time_ms'] = $this->sendDurationMs;
+        }
+
         return $this->attributes['extra'];
     }
 
     public function handleResponse($response)
     {
+        // Stopped here rather than in writeLog() so the figure is the provider
+        // round trip, not the round trip plus however long the database took.
+        // Failed sends are timed too — a send that takes ten seconds to fail is
+        // worth seeing.
+        if ($this->sendStartedAt) {
+            $this->sendDurationMs = round((microtime(true) - $this->sendStartedAt) * 1000, 1);
+        }
+
         if ( is_wp_error($response) ) {
             $code = $response->get_error_code();
 
@@ -286,44 +719,71 @@ class BaseHandler
     public function processResponse($response, $status)
     {
         if ($this->shouldBeLogged($status)) {
-            $data = [
-                'to' => $this->serialize($this->attributes['to']),
-                'from' => $this->attributes['from'],
-                'subject' => sanitize_text_field($this->attributes['subject']),
-                'body' => $this->attributes['message'],
-                'attachments' => $this->serialize($this->attributes['attachments']),
-                'status'   => $status ? 'sent' : 'failed',
-                'response' => $this->serialize($response),
-                'headers'  => $this->serialize($this->getParam('headers')),
-                'extra'    => $this->serialize($this->getExtraParams())
-            ];
+            try {
+                return $this->writeLog($response, $status);
+            } catch (\Throwable $e) {
+                /*
+                 * Logging runs after the provider has already accepted (or
+                 * rejected) the message, so a failure here must never change the
+                 * outcome of a send that already happened. Throwable rather than
+                 * Exception: the database layer can raise engine-level \Errors —
+                 * a missing PHP extension, for instance — which would otherwise
+                 * escape and kill the request after the email had gone out,
+                 * leaving the caller with no response at all.
+                 */
+                fluentMailDebugLog('Failed to write email log - ' . $e->getMessage());
+            }
+        }
 
-            if($this->existing_row_id) {
-                $row = (new Logger())->find($this->existing_row_id);
-                if($row) {
-                    $row['response'] = (array) $row['response'];
-                    if($status) {
-                        $row['response']['fallback'] = __('Sent using fallback connection ', 'fluent-smtp') . $this->attributes['from'];
-                        $row['response']['fallback_response'] = $response;
-                    } else {
-                        $row['response']['fallback'] = __('Tried to send using fallback but failed. ', 'fluent-smtp') . $this->attributes['from'];
-                        $row['response']['fallback_response'] = $response;
-                    }
+        return $status;
+    }
 
-                    $data['response'] = $this->serialize( $row['response']);
-                    $data['retries'] = $row['retries'] + 1;
-                    (new Logger())->updateLog($data, ['id' => $row['id']]);
+    /**
+     * Persist the email log row for a completed send.
+     *
+     * @param mixed $response Provider response or error payload.
+     * @param bool $status Whether the send succeeded.
+     * @return bool
+     */
+    protected function writeLog($response, $status)
+    {
+        $data = [
+            'to' => $this->serialize($this->attributes['to']),
+            'from' => $this->attributes['from'],
+            'subject' => sanitize_text_field($this->attributes['subject']),
+            'body' => $this->attributes['message'],
+            'attachments' => $this->serialize(self::attachmentsForLog($this->attributes['attachments'])),
+            'status'   => $status ? 'sent' : 'failed',
+            'response' => $this->serialize($response),
+            'headers'  => $this->serialize($this->getParam('headers')),
+            'extra'    => $this->serialize($this->getExtraParams())
+        ];
 
-                    if(!$status) {
-                        do_action('fluentmail_email_sending_failed_no_fallback', $row['id'], $this, $data);
-                    }
+        if($this->existing_row_id) {
+            $row = (new Logger())->find($this->existing_row_id);
+            if($row) {
+                $row['response'] = (array) $row['response'];
+                if($status) {
+                    $row['response']['fallback'] = __('Sent using fallback connection ', 'fluent-smtp') . $this->attributes['from'];
+                    $row['response']['fallback_response'] = $response;
+                } else {
+                    $row['response']['fallback'] = __('Tried to send using fallback but failed. ', 'fluent-smtp') . $this->attributes['from'];
+                    $row['response']['fallback_response'] = $response;
                 }
-            } else {
-                $logId = (new Logger)->add($data);
+
+                $data['response'] = $this->serialize( $row['response']);
+                $data['retries'] = $row['retries'] + 1;
+                (new Logger())->updateLog($data, ['id' => $row['id']]);
+
                 if(!$status) {
-                    // We have to fire an action for this failed job
-                    $status = apply_filters('fluentmail_email_sending_failed', $status, $logId, $this, $data);
+                    do_action('fluentmail_email_sending_failed_no_fallback', $row['id'], $this, $data);
                 }
+            }
+        } else {
+            $logId = (new Logger)->add($data);
+            if(!$status) {
+                // We have to fire an action for this failed job
+                $status = apply_filters('fluentmail_email_sending_failed', $status, $logId, $this, $data);
             }
         }
 
@@ -351,23 +811,46 @@ class BaseHandler
 
     protected function serialize(array $data)
     {
+        return serialize($this->recursiveSanitize($data));
+    }
+
+    protected function recursiveSanitize(array $data)
+    {
         foreach ($data as $key => $item) {
 
             if (is_array($item)) {
-                $this->serialize($item);
+                // Reassign the sanitized array back; without this, nested values
+                // (e.g. recipient display names in `to`) bypass sanitization.
+                $data[$key] = $this->recursiveSanitize($item);
+                continue;
             }
 
             if (is_object($item) || is_resource($item)) {
                 throw new InvalidArgumentException(
-                    "Invalid Data: Array cannot contain an object or resource."
+                    esc_html__('Invalid Data: Array cannot contain an object or resource.', 'fluent-smtp')
                 );
             }
 
             if (is_string($item)) {
                 if (is_serialized($item)) {
                     throw new InvalidArgumentException(
-                        "Invalid Data: Array cannot contain serialized data."
+                        esc_html__('Invalid Data: Array cannot contain serialized data.', 'fluent-smtp')
                     );
+                }
+
+                /*
+                 * Provider message IDs come in RFC 5322 angle brackets, for
+                 * example Brevo's `<2026...@smtp-relay.mailin.fr>`.
+                 * sanitize_text_field() reads `<...>` as an HTML tag and erases
+                 * the whole value, so drop only the enclosing pair. The pattern
+                 * allows no whitespace or inner brackets, so `Name <email>`
+                 * values are not touched. A message ID is not a mailbox, so it
+                 * skips sanitize_email(), which would mangle valid IDs such
+                 * as `<x@a.b>`.
+                 */
+                if (preg_match('/^<([^<>\s]+@[^<>\s]+)>\z/', $item, $matches)) {
+                    $data[$key] = sanitize_text_field($matches[1]);
+                    continue;
                 }
 
                 if (filter_var($item, FILTER_VALIDATE_EMAIL)) {
@@ -380,32 +863,7 @@ class BaseHandler
             }
         }
 
-        return serialize($data);
-    }
-
-    protected function fireWPMailFailedAction($data)
-    {
-        $code = is_numeric($data['code']) ? $data['code'] : 400;
-        $code = strlen($code) < 3 ? 400 : $code;
-
-        $mail_error_data['phpmailer_exception_code'] = $code;
-        $mail_error_data['errors'] = $data['errors'];
-
-        $error = new \WP_Error(
-            $code, $data['message'], $mail_error_data
-        );
-
-        $this->app->doAction('wp_mail_failed', $error);
-    }
-
-    protected function updatedLog($id, $data)
-    {
-        try {
-            $data['updated_at'] = current_time('mysql');
-            (new Logger)->updateLog($data, ['id' => $id]);
-        } catch (Exception $e) {
-            error_log($e->getMessage());
-        }
+        return $data;
     }
 
     public function getValidSenders($connection)
@@ -445,6 +903,437 @@ class BaseHandler
     public function removeSenderEmail($connection, $email)
     {
         return new \WP_Error('not_implemented', __('Not implemented', 'fluent-smtp'));
+    }
+
+    /**
+     * The 2.4.1 instance form of attachmentName(), kept so a custom provider that
+     * extends this class and overrides or calls it keeps working.
+     *
+     * @param array $attachment One row of PHPMailer::getAttachments()
+     * @return string
+     */
+    protected function getAttachmentName($attachment)
+    {
+        return self::attachmentName($attachment);
+    }
+
+    /**
+     * The 2.4.1 instance form of readAttachmentFile(), kept so a custom provider
+     * that extends this class and overrides or calls it keeps working.
+     *
+     * @param string $filePath
+     * @return string
+     * @throws Exception
+     */
+    protected function secureFileRead($filePath)
+    {
+        return self::readAttachmentFile($filePath);
+    }
+
+    /**
+     * Record an attachment that could not be read, then let the send continue.
+     *
+     * @param string     $provider Provider label used in the log line.
+     * @param \Exception $e        The failure from readAttachmentFile().
+     * @return void
+     */
+    protected function logAttachmentFailure($provider, $e)
+    {
+        fluentMailDebugLog(sprintf(
+            '%s: Failed to read attachment - %s',
+            $provider,
+            $e->getMessage()
+        ));
+    }
+
+    /**
+     * Resolve the file name an attachment should be delivered under.
+     *
+     * PHPMailer keeps the caller supplied name at index 2 — wp_mail() puts the
+     * attachments array key there — and the file's own base name at index 1, so
+     * a site that stores uploads under randomised names can still send a
+     * readable one. The name is caller controlled, so it is reduced to a bare
+     * file name before it reaches a Content-Disposition header or a provider
+     * payload.
+     *
+     * An in-memory attachment (addStringAttachment()) holds its data at index 0,
+     * so the path fallback never applies to it; without a name it is called
+     * "attachment", with an extension that matches its type where one is known.
+     *
+     * @param array $attachment One row of PHPMailer::getAttachments()
+     * @return string Empty only when a file row carries neither a name nor a path.
+     */
+    public static function attachmentName($attachment)
+    {
+        $isInMemory = !empty($attachment[5]);
+
+        $candidates = [
+            isset($attachment[2]) ? $attachment[2] : '',
+            !$isInMemory && isset($attachment[0]) ? $attachment[0] : ''
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (!is_string($candidate) || $candidate === '') {
+                continue;
+            }
+
+            // wp_basename() drops any directory part for both separators;
+            // the rest cannot be allowed to break out of a quoted header.
+            $name = str_replace(["\r", "\n", "\0", '"'], '', wp_basename($candidate));
+            $name = trim($name);
+
+            if ($name !== '') {
+                return $name;
+            }
+        }
+
+        if ($isInMemory) {
+            return 'attachment' . self::extensionForType(isset($attachment[4]) ? $attachment[4] : '');
+        }
+
+        return '';
+    }
+
+    /**
+     * The contents of an attachment, however it was added.
+     *
+     * @param array $attachment One row of PHPMailer::getAttachments()
+     * @return string
+     * @throws Exception When a file row's path cannot be read safely.
+     */
+    public static function attachmentContent($attachment)
+    {
+        if (!empty($attachment[5])) {
+            return (string) $attachment[0];
+        }
+
+        return self::readAttachmentFile($attachment[0]);
+    }
+
+    /**
+     * The MIME type an attachment should be delivered with.
+     *
+     * PHPMailer records a type for every attachment, from the caller or from
+     * the path's extension, and uses it in the messages it builds; API
+     * providers send the same type. Where the record holds only the generic
+     * type (a path with no extension, or declared by the caller), the
+     * delivered name's extension decides, so such an attachment can arrive
+     * with a more specific type than over SMTP. Needs no fileinfo extension.
+     *
+     * @param array $attachment One row of PHPMailer::getAttachments()
+     * @return string
+     */
+    public static function attachmentType($attachment)
+    {
+        $type = isset($attachment[4]) ? trim((string) $attachment[4]) : '';
+
+        if (($type === '' || $type === 'application/octet-stream') && class_exists('\PHPMailer\PHPMailer\PHPMailer')) {
+            $byName = \PHPMailer\PHPMailer\PHPMailer::filenameToType(self::attachmentName($attachment));
+
+            if ($byName !== 'application/octet-stream') {
+                return $byName;
+            }
+        }
+
+        // A file on disk whose name gives no type (data.json, logo.svg, README):
+        // detect it from the content, as the providers did before this helper.
+        if (($type === '' || $type === 'application/octet-stream') && empty($attachment[5]) && isset($attachment[0]) && is_string($attachment[0])) {
+            $detected = self::detectFileType($attachment[0]);
+
+            if ($detected !== '') {
+                return $detected;
+            }
+        }
+
+        return $type === '' ? 'application/octet-stream' : $type;
+    }
+
+    /**
+     * The Content-ID of an inline (embedded) attachment, or '' for a normal one.
+     *
+     * PHPMailer marks an embedded image (addEmbeddedImage(), addStringEmbeddedImage(),
+     * wp_mail()'s $embeds) with disposition "inline" at index 6 and its cid at
+     * index 7. The HTML refers to it as "cid:<value>", so the value is returned
+     * as is, without the "cid:" prefix. Line breaks, NUL bytes, quotes and angle
+     * brackets are removed so it cannot break out of a header or payload field.
+     *
+     * @param array $attachment One row of PHPMailer::getAttachments()
+     * @return string
+     */
+    public static function inlineContentId($attachment)
+    {
+        if (!isset($attachment[6]) || $attachment[6] !== 'inline' || !isset($attachment[7]) || !is_scalar($attachment[7])) {
+            return '';
+        }
+
+        return trim(str_replace(["\r", "\n", "\0", '"', '<', '>'], '', (string) $attachment[7]));
+    }
+
+    /**
+     * inlineContentId() for every attachment of one email, with each cid used once.
+     *
+     * Providers that turn the cid into the inline part's name (SparkPost, SMTP2GO,
+     * Mailgun) need it unique: SparkPost refuses a transmission with two inline
+     * images of the same name. PHPMailer stores 0 when an inline attachment has
+     * no cid, and WordPress's list-keyed $embeds use 0, 1, ... as well, so a
+     * repeat is possible. A later attachment that repeats a cid gets '' and goes
+     * out as a normal attachment, so it is never lost.
+     *
+     * @param array $attachments PHPMailer::getAttachments() rows
+     * @return array The same keys, each mapped to its cid or ''.
+     */
+    public static function inlineContentIds($attachments)
+    {
+        $ids = [];
+        $seen = [];
+
+        foreach ((array) $attachments as $key => $attachment) {
+            $contentId = self::inlineContentId($attachment);
+
+            if ($contentId !== '' && isset($seen[$contentId])) {
+                $contentId = '';
+            }
+
+            if ($contentId !== '') {
+                $seen[$contentId] = true;
+            }
+
+            $ids[$key] = $contentId;
+        }
+
+        return $ids;
+    }
+
+    /**
+     * The MIME type of a file on disk from its content, or '' when it cannot be told.
+     *
+     * Runs only for a path that passes readAttachmentFile()'s checks, and only reports a
+     * type: it never returns file content.
+     *
+     * @param string $filePath
+     * @return string
+     */
+    protected static function detectFileType($filePath)
+    {
+        try {
+            self::assertReadableAttachmentPath($filePath);
+        } catch (\Exception $e) {
+            return '';
+        }
+
+        $realPath = @realpath($filePath);
+        $type = '';
+
+        if (function_exists('mime_content_type')) {
+            $type = (string) @mime_content_type($realPath);
+        } elseif (function_exists('finfo_open')) {
+            $finfo = finfo_open(FILEINFO_MIME_TYPE);
+            if ($finfo) {
+                $type = (string) finfo_file($finfo, $realPath);
+                finfo_close($finfo);
+            }
+        }
+
+        $type = strtolower(trim(str_replace(';', '', $type)));
+
+        /*
+         * Content detection is trusted only where it is reliable: text formats the
+         * name table does not know (JSON, SVG, XML, extensionless text) and formats
+         * with a clear signature. For other bytes libmagic guesses (random binary
+         * reads as image/x-tga), so those stay application/octet-stream.
+         */
+        $reliable = ['application/json', 'image/svg+xml', 'application/xml', 'text/xml', 'application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/zip'];
+
+        if (strpos($type, 'text/') === 0 || in_array($type, $reliable, true)) {
+            return $type;
+        }
+
+        return '';
+    }
+
+    /**
+     * A file extension (with its dot) for a MIME type, from PHPMailer's own table.
+     *
+     * @param string $type
+     * @return string Empty when the type is not one of the common ones below.
+     */
+    protected static function extensionForType($type)
+    {
+        // PHPMailer answers application/octet-stream for extensions it does not know.
+        if (!$type || $type === 'application/octet-stream' || !class_exists('\PHPMailer\PHPMailer\PHPMailer')) {
+            return '';
+        }
+
+        // Covers the file types API providers allow-list (Brevo's included), so an
+        // unnamed attachment of one of them is named with an extension they accept.
+        $extensions = [
+            'pdf', 'png', 'jpg', 'gif', 'webp', 'txt', 'csv', 'ics', 'html', 'xml', 'zip', 'doc', 'docx', 'xls', 'xlsx', 'rtf',
+            'tif', 'bmp', 'css', 'ppt', 'pptx', 'tar', 'eps', 'mp3', 'm4a', 'wav', 'aif', 'mp4', 'mov', 'avi', 'mpeg', 'wmv', 'mkv'
+        ];
+
+        foreach ($extensions as $extension) {
+            if (\PHPMailer\PHPMailer\PHPMailer::_mime_types($extension) === $type) {
+                return '.' . $extension;
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * The attachment records as the email log stores them.
+     *
+     * An attachment added in memory (addStringAttachment()) carries its data at
+     * index 0. That data is not kept: the log has no use for it (it cannot be
+     * resent from a sanitized copy) and it would bloat the log table. Index 0 is
+     * emptied and the size is kept at index 8 so the log can still describe it.
+     * File attachments keep their path, which is what a resend reads.
+     *
+     * @param mixed $attachments PHPMailer::getAttachments() records.
+     * @return array
+     */
+    public static function attachmentsForLog($attachments)
+    {
+        if (!is_array($attachments)) {
+            return [];
+        }
+
+        foreach ($attachments as $key => $attachment) {
+            if (is_array($attachment) && !empty($attachment[5])) {
+                $data = isset($attachment[0]) && is_string($attachment[0]) ? $attachment[0] : '';
+                // Already stripped (a stored row formatted again): keep the stored size.
+                if ($data !== '' || !isset($attachment[8])) {
+                    $attachment[8] = strlen($data);
+                }
+                $attachment[0] = '';
+                $attachments[$key] = $attachment;
+            }
+        }
+
+        return $attachments;
+    }
+
+    /**
+     * Whether a file path can be attached again: a readable file outside the
+     * blocked locations, judged by the same checks as readAttachmentFile().
+     *
+     * @param mixed $filePath
+     * @return bool
+     */
+    public static function isReadableAttachmentPath($filePath)
+    {
+        try {
+            self::assertReadableAttachmentPath($filePath);
+            return true;
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Throws unless the path is a readable file outside the blocked locations.
+     *
+     * @param mixed $filePath
+     * @return void
+     * @throws Exception
+     */
+    protected static function assertReadableAttachmentPath($filePath)
+    {
+        // realpath() throws a ValueError (not an Exception) on a NUL byte in PHP 8,
+        // which escaped every provider's catch: a path never contains one.
+        if (!is_string($filePath) || strpos($filePath, "\0") !== false) {
+            throw new Exception(__('Invalid file path', 'fluent-smtp'));
+        }
+
+        // Resolve the real path to prevent path traversal attacks. A path outside
+        // open_basedir (an old log row after a host move) makes realpath() warn
+        // and return false; the false is handled below, and the warning would
+        // otherwise reach the Logs page's AJAX response when errors are displayed.
+        $realPath = @realpath($filePath);
+
+        // Validate that realpath returned a valid path
+        if ($realPath === false) {
+            throw new Exception(
+                sprintf(__('Invalid file path: %s', 'fluent-smtp'), esc_html($filePath))
+            );
+        }
+
+        // Verify it's actually a file (not a directory)
+        if (!is_file($realPath)) {
+            throw new Exception(
+                sprintf(__('Path is not a file: %s', 'fluent-smtp'), esc_html($realPath))
+            );
+        }
+
+        // Verify the file is readable
+        if (!is_readable($realPath)) {
+            throw new Exception(
+                sprintf(__('File is not readable: %s', 'fluent-smtp'), esc_html($realPath))
+            );
+        }
+
+        // Security check: Block access to sensitive system directories
+        // This prevents reading sensitive files while allowing plugin/theme attachments
+        $blockedPaths = [
+            '/etc/',
+            '/proc/',
+            '/sys/',
+            '/dev/',
+            '/root/',
+            ABSPATH . 'wp-config.php',
+            dirname(ABSPATH) . '/wp-config.php',  // WordPress often stores wp-config.php one level up
+            ABSPATH . '.htaccess',
+        ];
+
+        // Allow developers to customize blocked paths via filter
+        $blockedPaths = apply_filters('fluentsmtp_attachment_blocked_paths', $blockedPaths);
+
+        // Validate filter return to prevent fatal errors
+        if (!is_array($blockedPaths)) {
+            $blockedPaths = [];
+        } else {
+            // Ensure all entries are strings
+            $blockedPaths = array_values(array_filter($blockedPaths, 'is_string'));
+        }
+
+        foreach ($blockedPaths as $blockedPath) {
+            // Under open_basedir the blocked system folders usually lie outside the
+            // allowed paths: realpath() warns and returns false, and the folder is
+            // already unreadable, so the check is skipped without the warning.
+            $blockedRealPath = @realpath($blockedPath);
+            // Match the location itself or anything under it, so /etc does not
+            // also block /etcetera/ or /dev block /devel/.
+            if ($blockedRealPath && ($realPath === $blockedRealPath || strpos($realPath, rtrim($blockedRealPath, '/') . '/') === 0)) {
+                throw new Exception(
+                    __('Access to this file location is restricted for security reasons', 'fluent-smtp')
+                );
+            }
+        }
+    }
+
+    /**
+     * Securely read file contents with path traversal protection
+     *
+     * @param string $filePath The file path to read
+     * @return string File contents on success
+     * @throws Exception If path validation fails or file cannot be read
+     */
+    public static function readAttachmentFile($filePath)
+    {
+        self::assertReadableAttachmentPath($filePath);
+
+        $realPath = realpath($filePath);
+
+        // Read and return file contents
+        $contents = file_get_contents($realPath);
+
+        if ($contents === false) {
+            throw new Exception(
+                sprintf(__('Failed to read file: %s', 'fluent-smtp'), esc_html($realPath))
+            );
+        }
+
+        return $contents;
     }
 
 }

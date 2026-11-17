@@ -23,7 +23,7 @@ class Handler extends BaseHandler
             return $this->postSend();
         }
 
-        return $this->handleResponse(new \WP_Error(422, __('Something went wrong!', 'fluent-smtp'), []));
+        return $this->handleResponse(new \WP_Error(422, __('Something went wrong.', 'fluent-smtp'), []));
     }
 
     public function postSend()
@@ -70,7 +70,7 @@ class Handler extends BaseHandler
                     'message' => Arr::get($responseBody, 'message_id')
                 ];
             } else {
-                $returnResponse = new \WP_Error($responseCode, Arr::get($responseBody, 'error', 'Unknown Error'), $responseBody);
+                $returnResponse = new \WP_Error($responseCode, Arr::get($responseBody, 'error', __('Unknown Error', 'fluent-smtp')), $responseBody);
             }
         }
 
@@ -148,23 +148,38 @@ class Handler extends BaseHandler
         }, $this->getParam('headers.bcc'));
     }
 
+    /**
+     * The `content` parts of the v5 request.
+     *
+     * The v5 API accepts only `html` and `amp` parts (the official SDK's TypeEnum),
+     * so a plain-text alternative cannot be sent, and AltBody is not AMP. HTML and
+     * multipart email goes out as its HTML body. A plain-text email goes out as
+     * HTML too, escaped exactly and with its line breaks kept, so it reads as
+     * written; one that carries HTML tags is left as it is.
+     *
+     * @return array[]
+     */
     protected function getBody()
     {
-        $return = [
-            [
-                'type'  => 'html',
-                'value' => $this->getParam('message')
-            ]
-        ];
+        $message = (string) $this->getParam('message');
+        $contentType = strtolower((string) $this->phpMailer->ContentType . ' ' . (string) $this->getHeader('content-type'));
+        $isHtml = strpos($contentType, 'html') !== false || strpos($contentType, 'multipart/alternative') !== false;
 
-        if ($this->phpMailer->contentType == 'multipart/alternative') {
-            $return[] = [
-                'type'  => 'amp',
-                'value' => $this->phpMailer->AltBody
-            ];
+        // A body declared as plain text that carries HTML tags (a plugin that sends
+        // HTML without setting the content type) goes out as before, unescaped.
+        // Only a real tag counts: a tag name followed by a space, "/" or ">", or a
+        // comment or doctype. strip_tags() also treats "Name <john@example.com>"
+        // and "<https://...>" as tags, which sent such text raw and lost it.
+        if (!$isHtml && !preg_match('~<(?:/?[a-z][a-z0-9-]*(?:[\s/][^<>]*)?>|!--|!doctype\b)~i', $message)) {
+            $message = nl2br(htmlspecialchars($message, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8', true), false);
         }
 
-        return $return;
+        return [
+            [
+                'type'  => 'html',
+                'value' => $message
+            ]
+        ];
     }
 
     protected function getAttachments()
@@ -172,23 +187,15 @@ class Handler extends BaseHandler
         $data = [];
 
         foreach ($this->getParam('attachments') as $attachment) {
-            $file = false;
-
             try {
-                if (is_file($attachment[0]) && is_readable($attachment[0])) {
-                    $fileName = basename($attachment[0]);
-                    $file = file_get_contents($attachment[0]);
-                }
+                $file = self::attachmentContent($attachment);
             } catch (\Exception $e) {
-                $file = false;
-            }
-
-            if ($file === false) {
+                $this->logAttachmentFailure('PepiPost', $e);
                 continue;
             }
 
             $data[] = [
-                'name'    => $fileName,
+                'name'    => self::attachmentName($attachment),
                 'content' => base64_encode($file)
             ];
         }
